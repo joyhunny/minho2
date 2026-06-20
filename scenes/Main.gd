@@ -18,6 +18,10 @@ const INVENTORY_SCRIPT := preload("res://systems/Inventory.gd")
 const LOOT_SCRIPT := preload("res://systems/Loot.gd")
 const INV_PANEL_SCRIPT := preload("res://ui/InventoryPanel.gd")
 const COOK_HUD_SCRIPT := preload("res://ui/CookHUD.gd")
+const TERRAIN_SCRIPT := preload("res://systems/Terrain.gd")
+const BOSS_SCENE := preload("res://scenes/Boss.tscn")
+const DIFFICULTY_SCRIPT := preload("res://ui/DifficultyPanel.gd")
+const WORLDMAP_SCRIPT := preload("res://ui/WorldMapPanel.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
@@ -76,21 +80,31 @@ var inv_panel = null              # InventoryPanel (가방 버튼 + 장비 창)
 var cook_hud = null               # CookHUD (좌하단 고기 패널 + 먹기 버튼)
 var food_buff_t := 0.0            # 고기 먹기 짧은 버프 남은 시간(S5/S6 버프 연동용 자리)
 
+# ── 지역·보스·난이도 (S5) ───────────────────────────────────
+var terrain: Node2D = null        # TerrainSystem (지역별 바위·독·버프 + 효과)
+var boss: Node = null             # 현재 보스 노드 (없으면 null)
+var boss_spawned := false         # 이 지역에서 보스가 이미 등장했나 (중복 방지)
+var diff_panel = null             # DifficultyPanel (난이도 선택창)
+var worldmap_panel = null         # WorldMapPanel (세계 지도)
+var _chapter_clear_layer: CanvasLayer = null  # 챕터 클리어/지역 입장 배너(탭 대기)
+var _banner_tap_action := ""      # "" | "to_worldmap" — 배너 탭 시 동작
+
 
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
 		kfont = load(FONT_PATH)
 	rng.randomize()
 	_core_rng = GameData.make_rng(GameState.seed_val)
-	# 난이도 미선택이면 '보통'으로 폴백 (난이도 선택 화면은 S5)
-	if GameState.difficulty < 0:
-		GameState.difficulty = 1
+	# 챕터는 보통 region+1 (저장값이 있으면 그것 — 난이도 스케일에 쓰임)
+	if GameState.chapter < 1:
+		GameState.chapter = GameState.region + 1
 
 	_build_inventory()       # 인벤토리 시스템(순수 로직) — 다른 빌드보다 먼저(loot·패널·전직이 참조)
 	_build_world()
 	_build_player()
 	_build_camera()
 	_build_fx()
+	_build_terrain()         # 지역별 바위·독·버프(월드 좌표) — fx 뒤, loot 앞
 	_build_loot()            # 바닥 장비·날고기·그릴(월드 좌표) — fx·player 뒤
 	_build_skills()
 	_build_joystick()
@@ -98,8 +112,16 @@ func _ready() -> void:
 	_build_growth_ui()
 	_build_skill_ui()
 	_build_inv_ui()          # 가방 버튼·장비 창 + 요리 HUD
+	_build_region_ui()       # 난이도 선택창 + 세계 지도 + 처음부터 버튼
 	_build_flash()
 	_build_info()
+
+	# 보스 등장 플래그: 이 지역에서 아직 안 잡았으면 false (저장과 무관, 세션 단위)
+	boss_spawned = false
+
+	# 난이도 미선택(첫 실행)이면 난이도 선택창을 먼저 띄운다 (mino1 인트로 흐름)
+	if GameState.difficulty < 0 and diff_panel:
+		diff_panel.open()
 
 
 # ── 성장 UI: HUD + 레벨업 선택창 + 스탯 분배창 (S2) ──────────
@@ -257,6 +279,16 @@ func _build_inventory() -> void:
 	add_child(inventory)
 
 
+# ── 지형(지역별 바위·독·버프, 월드 좌표 Node2D) ─────────────
+func _build_terrain() -> void:
+	terrain = Node2D.new()
+	terrain.name = "Terrain"
+	terrain.set_script(TERRAIN_SCRIPT)
+	terrain.set("main", self)
+	terrain.z_index = -70   # 풀밭(-100) 위, 캐릭터/아이템 아래 (바닥에 깔린 지형)
+	add_child(terrain)
+
+
 # ── 루트(바닥 장비·날고기·그릴·요리, 월드 좌표 Node2D) ───────
 func _build_loot() -> void:
 	loot = Node2D.new()
@@ -265,6 +297,36 @@ func _build_loot() -> void:
 	loot.set("main", self)
 	loot.z_index = 50   # 적(y기반)보다 위지만 Fx(3000) 아래 — 바닥 아이템 느낌
 	add_child(loot)
+
+
+# ── 지역 UI: 난이도 선택창 + 세계 지도 + 처음부터 버튼 (S5) ──
+func _build_region_ui() -> void:
+	# 난이도 선택창 (제일 위 — 일시정지)
+	var diff_layer := CanvasLayer.new()
+	diff_layer.name = "DifficultyLayer"
+	diff_layer.layer = 13
+	diff_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(diff_layer)
+	diff_panel = Control.new()
+	diff_panel.name = "DifficultyPanel"
+	diff_panel.set_script(DIFFICULTY_SCRIPT)
+	diff_panel.set("main", self)
+	diff_layer.add_child(diff_panel)
+
+	# 세계 지도 (난이도 아래, 일시정지)
+	var map_layer := CanvasLayer.new()
+	map_layer.name = "WorldMapLayer"
+	map_layer.layer = 12
+	map_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(map_layer)
+	worldmap_panel = Control.new()
+	worldmap_panel.name = "WorldMapPanel"
+	worldmap_panel.set_script(WORLDMAP_SCRIPT)
+	worldmap_panel.set("main", self)
+	map_layer.add_child(worldmap_panel)
+
+	# 우상단 '처음부터(↻)' 버튼 — 난이도부터 다시 (mino1 _restartBtn)
+	_build_restart_button()
 
 
 # ── 장비 창(가방 버튼) + 요리 HUD ───────────────────────────
@@ -291,6 +353,70 @@ func _build_inv_ui() -> void:
 	cook_hud.set_script(COOK_HUD_SCRIPT)
 	cook_hud.set("main", self)
 	cook_layer.add_child(cook_hud)
+
+
+# ── 처음부터(↻) 버튼 — 우상단, 가방·STAT 버튼 아래 (mino1 _restartBtn) ──
+var restart_btn_ctrl: Control = null
+func _build_restart_button() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "RestartLayer"
+	layer.layer = 4   # 다른 작업대 버튼들과 같은 대
+	add_child(layer)
+	var ctrl := Control.new()
+	ctrl.name = "RestartBtn"
+	ctrl.anchor_left = 1.0
+	ctrl.anchor_right = 1.0
+	ctrl.offset_left = -76.0
+	ctrl.offset_top = 108.0
+	ctrl.offset_right = -12.0
+	ctrl.offset_bottom = 152.0
+	ctrl.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(ctrl)
+	var dn := Node2D.new()
+	dn.set_script(_make_restart_draw_script())
+	dn.set("ctrl", ctrl)
+	ctrl.add_child(dn)
+	ctrl.gui_input.connect(_on_restart_input)
+	restart_btn_ctrl = ctrl
+
+
+func _on_restart_input(event: InputEvent) -> void:
+	var pressed: bool = (event is InputEventScreenTouch and event.pressed) or \
+		(event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed)
+	if not pressed:
+		return
+	# 다른 창이 떠 있으면 무시 (실수 방지)
+	if get_tree().paused:
+		return
+	# 처음부터 = 진행 초기화 + 난이도부터 다시 (mino1 _newGame)
+	GameState.new_game(GameState.difficulty if GameState.difficulty >= 0 else 1)
+	if diff_panel:
+		diff_panel.open()
+
+
+func _make_restart_draw_script() -> GDScript:
+	var src := """
+extends Node2D
+var ctrl
+func _process(_d):
+	queue_redraw()
+func _draw():
+	if ctrl == null:
+		return
+	var r = Rect2(0, 0, ctrl.size.x, ctrl.size.y)
+	draw_rect(r, Color(0.18, 0.1, 0.12, 0.7), true)
+	draw_rect(r, Color(0.75, 0.31, 0.31, 0.9), false, 2.0)
+	var c = ctrl.size / 2.0
+	var rad = min(ctrl.size.x, ctrl.size.y) * 0.28
+	draw_arc(c, rad, -2.2, 2.2, 20, Color(1, 0.8, 0.8, 0.9), 3.0)
+	# 화살촉
+	var tip = c + Vector2(cos(2.2), sin(2.2)) * rad
+	draw_circle(tip, 3.0, Color(1, 0.8, 0.8, 0.9))
+"""
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
 
 
 # ── 화면 전체 색 플래시 오버레이 (mino1 _flashGfx) ───────────
@@ -531,11 +657,21 @@ func _process(delta: float) -> void:
 
 	var dt := delta * time_scale
 
+	# ── 지형 효과 (바위 밀어냄·독 피해·버프 존) ──
+	if terrain:
+		terrain.update(dt)
+
 	# ── 스폰 ──
 	_update_spawn(dt)
 
 	# ── 전투 판정 (공격 입력 → 명중) ──
 	_update_combat(dt)
+
+	# ── 보스 등장 체크 (지역별 목표 킬 수, 1회만) (mino1) ──
+	var boss_kill_trigger := 12 + GameState.chapter * 4
+	if not boss_spawned and int(GameState.player.get("kills", 0)) >= boss_kill_trigger:
+		boss_spawned = true
+		_spawn_boss()
 
 	# ── HP/MP 자동 회복 (난이도 regen) ──
 	_update_regen(dt)
@@ -600,8 +736,8 @@ func _spawn_enemy() -> void:
 	var scaled_xp: int = int(round(float(def["xp"]) * chapter_mult))
 	var scaled_sp: float = round(float(def["sp"]) * pow(1.05, chapter - 1))
 
-	# 엘리트 판정 (지역 elite_rate)
-	var elite_rate: float = float(region_def.get("elite_rate", 0.08))
+	# 엘리트 판정 (지역 elite_rate — 지형이 깔려 있으면 거기서 읽음)
+	var elite_rate: float = terrain.region_elite_rate if terrain else float(region_def.get("elite_rate", 0.08))
 	var is_elite: bool = rng.randf() < elite_rate
 
 	var stats := {
@@ -654,8 +790,16 @@ func _update_combat(dt: float) -> void:
 			var skills: Dictionary = p.get("skills", {})
 			# 치명타 (critical 스킬 — 전직 보너스는 S3)
 			var crit_chance := 0.15 * float(skills.get("critical", 0))
+			# 전직 보너스 (도적 +30%, 닌자 +15%) (mino1)
+			if p.get("job", null) == "rogue":
+				crit_chance += 0.30
+			if p.get("job2", null) == "ninja":
+				crit_chance += 0.15
 			var is_crit := crit_chance > 0.0 and rng.randf() < crit_chance
 			var dmg := atk_pow
+			# 크리스탈 버프: 공격력 +30% (mino1 _buffActive)
+			if terrain and terrain.buff_active:
+				dmg *= 1.3
 			if is_crit:
 				dmg *= 2.0
 			dmg = round(dmg)
@@ -672,6 +816,42 @@ func _update_combat(dt: float) -> void:
 			# 시너지: 치명타 + 공격가속 → 다음 공격 쿨다운 30% 감소 (mino1)
 			if is_crit and int(skills.get("quick_strike", 0)) > 0:
 				p["atkCD"] = maxf(0.0, float(p.get("atkCD", 0)) * 0.7)
+
+	# ── 보스 피격 판정 (mino1 _updateCombat 의 보스 처리) ──
+	if boss != null and is_instance_valid(boss) and not boss.dead:
+		var bdx: float = boss.global_position.x - player.global_position.x
+		var bdy: float = boss.global_position.y - player.global_position.y
+		var bdist := sqrt(bdx * bdx + bdy * bdy)
+		# 보스는 덩치가 커서 사거리 +80 (mino1)
+		if bdist < atk_range + 80.0 and bdx * face >= -30.0:
+			var bskills: Dictionary = p.get("skills", {})
+			var bcrit := 0.15 * float(bskills.get("critical", 0))
+			if p.get("job", null) == "rogue":
+				bcrit += 0.30
+			if p.get("job2", null) == "ninja":
+				bcrit += 0.15
+			var bis_crit := bcrit > 0.0 and rng.randf() < bcrit
+			var bdmg := atk_pow
+			if terrain and terrain.buff_active:
+				bdmg *= 1.3
+			if bis_crit:
+				bdmg *= 2.0
+			# 기절/빈틈 = 약점 추가타 (보스가 vulnerable 일 때)
+			var vuln: float = boss.vuln_mult if boss.vulnerable else 1.0
+			if vuln > 1.0:
+				bdmg *= vuln
+			bdmg = round(bdmg)
+			boss.take_hit(bdmg)
+			fx.add_impact_hit(boss.global_position + Vector2(0, -30), bis_crit or vuln > 1.0)
+			spawn_float_text(boss.global_position + Vector2(0, -50), str(int(bdmg)), bis_crit or vuln > 1.0)
+			if vuln > 1.0:
+				spawn_float_text(boss.global_position + Vector2(0, -86), "약점!", true)
+				fx.add_particles(boss.global_position + Vector2(0, -20), Color8(0xff, 0xf0, 0x4a), 8)
+			# 생명 흡수도 보스에 적용
+			var bdrain := int(bskills.get("life_drain", 0))
+			if bdrain > 0:
+				p["hp"] = minf(float(p.get("maxhp", 0)), float(p.get("hp", 0)) + 1.5 * bdrain)
+			hit_count += 1
 
 	# 히트스톱 (명중 시 0.04초) (mino1)
 	if hit_count > 0:
@@ -1021,6 +1201,240 @@ func _on_game_over() -> void:
 	add_shake(0.4, 12.0)
 	if info_label:
 		info_label.text = "쓰러졌다! 잠시 무적 — 다시 싸우자"
+
+
+# ════════════════════════════════════════════════════════════
+#  S5: 지역·보스·난이도
+# ════════════════════════════════════════════════════════════
+
+# ── 고정 수치 피해 (보스 궁극기·독장판) — 난이도 배율 + 비율 방어 (mino1 _hazardDmg/_damagePlayer) ──
+# 잡몹 피해는 스폰 때 이미 난이도가 반영돼 _incomingDmg(player.hurt)만 쓰지만,
+# 보스·메테오·독장판은 "고정 raw" 라 여기서 dmgMult 를 곱하고 비율 방어를 적용한다.
+func hazard_damage(raw: float, inv_dur: float, part_color: Color, prefix: String) -> void:
+	var p: Dictionary = GameState.player
+	if player and player.is_invincible():
+		return
+	var diff: Dictionary = GameData.DIFFICULTY_DEFS[clampi(GameState.difficulty, 0, GameData.DIFFICULTY_DEFS.size() - 1)]
+	var dmg_mult := float(diff.get("dmg_mult", 1.0))
+	var armor := float(p.get("armor", 0.0))
+	var real := maxf(1.0, round(raw * dmg_mult * 70.0 / (70.0 + armor)))
+	p["hp"] = maxf(0.0, float(p["hp"]) - real)
+	if inv_dur > 0.0:
+		p["inv"] = maxf(float(p.get("inv", 0.0)), inv_dur)
+	# 피해 숫자 (독은 ☠ 접두)
+	var label := ("%s %d" % [prefix, int(real)]) if prefix != "" else str(int(real))
+	if prefix != "":
+		spawn_heal_text(player.global_position, label, part_color)
+	else:
+		spawn_float_text(player.global_position, label, false)
+	if part_color != Color.WHITE:
+		fx.add_particles(player.global_position, part_color, 5)
+	add_shake(0.16, 5.5)
+	if float(p["hp"]) <= 0.0:
+		_on_game_over()
+
+
+# ── 이동 배율 (지역 진흙 + 크리스탈 버프) (mino1 spMult) — Player 가 읽음 ──
+func player_move_mult() -> float:
+	var mult := 1.0
+	if terrain:
+		mult *= terrain.region_move_mult
+		if terrain.buff_active:
+			mult *= 1.25
+	return mult
+
+
+# ── 보스 등장 (mino1 _spawnBoss) — 현재 지역이 지정한 보스 1종 ──
+func _spawn_boss() -> void:
+	if boss != null and is_instance_valid(boss):
+		return
+	var region_idx: int = clampi(GameState.region, 0, GameData.REGION_DEFS.size() - 1)
+	var region_def: Dictionary = GameData.REGION_DEFS[region_idx]
+	var boss_type: String = region_def.get("boss", "elephant")
+	var chapter: int = GameState.chapter
+	var p: Dictionary = GameState.player
+	boss = BOSS_SCENE.instantiate()
+	boss.global_position = Vector2(p["x"], p["y"] - 200.0)
+	boss.setup(boss_type, chapter, player, self)
+	add_child(boss)
+
+
+# ── 보스 처치 보상 (Boss._die 가 호출) — 전설급 드랍 + 골드 + 챕터 클리어 ──
+func on_boss_died(pos: Vector2) -> void:
+	var p: Dictionary = GameState.player
+	# 전설급 보장 드랍 (mino1 tryDrop is_boss=true → rarity>=2)
+	if loot:
+		var drng := GameData.make_rng(rng.randi())
+		var dropped = GameData.try_drop(drng, pos.x, pos.y, true)
+		if dropped:
+			loot.add_ground_item(dropped)
+	# 보스 골드 (mino1: 80 + 0~39)
+	var boss_gold: int = 80 + int(floor(rng.randf() * 40.0))
+	p["gold"] = int(p.get("gold", 0)) + boss_gold
+	_spawn_gold_text(pos + Vector2(0, -60), boss_gold, true)
+	# 남은 잡몹도 정리 (평온한 전환)
+	for e in enemies:
+		if is_instance_valid(e):
+			fx.add_particles(e.global_position, Color8(0x9f, 0xe3, 0xa8), 8)
+			e.queue_free()
+	enemies.clear()
+	boss = null
+	GameState.save_game()
+	# 챕터 클리어 → (탭) → 다음 지역 해금 + 세계 지도
+	_show_chapter_clear()
+
+
+# ── 난이도 선택 직후 (DifficultyPanel 이 호출) — 세계 지도로 ──
+func on_difficulty_picked() -> void:
+	# 첫 진입이면 지역 0 으로 바로 들어가게 세계 지도를 띄운다
+	if worldmap_panel:
+		worldmap_panel.open()
+
+
+# ── 세계 지도에서 선택한 지역 입장 (mino1 _enterRegion) ──────
+func enter_region(idx: int) -> void:
+	var region: int = clampi(idx, 0, GameData.REGION_DEFS.size() - 1)
+	GameState.region = region
+	GameState.chapter = region + 1   # 난이도 스케일 재사용
+	var def: Dictionary = GameData.REGION_DEFS[region]
+	# 배경색 전환
+	_retint_ground(def.get("ground_tint", Color.WHITE))
+	# 지형 재생성 (지역별 바위·독·버프·이동배율·엘리트율)
+	if terrain:
+		terrain.init_zones()
+	# 적·보스 리셋
+	boss_spawned = false
+	if boss != null and is_instance_valid(boss):
+		boss.queue_free()
+	boss = null
+	GameState.player["kills"] = 0
+	for e in enemies:
+		if is_instance_valid(e):
+			e.queue_free()
+	enemies.clear()
+	# 플레이어를 지역 중앙으로
+	var cx := GameData.WORLD_W / 2.0
+	var cy := GameData.WORLD_H / 2.0
+	player.global_position = Vector2(cx, cy)
+	GameState.player["x"] = cx
+	GameState.player["y"] = cy
+	spawn_timer = 0.0
+	GameState.save_game()
+	# 입장 배너
+	_show_region_enter_banner(def)
+
+
+# ── 풀밭 색조 재적용 (지역 전환) ────────────────────────────
+func _retint_ground(tint: Color) -> void:
+	var ground := get_node_or_null("Ground")
+	if ground:
+		ground.modulate = tint
+
+
+# ── 챕터 클리어 배너 (mino1 _showChapterClearPanel) — 탭 → 세계 지도 ──
+func _show_chapter_clear() -> void:
+	# 다음 지역 해금
+	var next := mini(GameState.region + 1, GameData.REGION_DEFS.size() - 1)
+	GameState.max_region = maxi(GameState.max_region, next)
+	GameState.save_game()
+	var p: Dictionary = GameState.player
+	_clear_banner()
+	_chapter_clear_layer = CanvasLayer.new()
+	_chapter_clear_layer.layer = 14
+	_chapter_clear_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_chapter_clear_layer)
+	get_tree().paused = true
+	var lines := [
+		["제%d장 클리어!" % GameState.chapter, 28, Color8(0xff, 0xcf, 0x5c), 0.30],
+		["보스를 쓰러뜨렸다.", 16, Color8(0xcb, 0xe0, 0xcb), 0.40],
+		["Lv %d · 총 처치 %d" % [int(p.get("lvl", 1)), int(p.get("kills", 0))], 18, Color8(0x9f, 0xe3, 0xa8), 0.46],
+		["다음 지역이 열렸다!", 15, Color8(0xff, 0x99, 0x66), 0.54],
+		["(화면을 탭하면 세계 지도로)", 14, Color8(0x88, 0x99, 0x88), 0.66],
+	]
+	_build_banner_labels(lines, true)
+	_banner_tap_action = "to_worldmap"
+
+
+# ── 지역 입장 배너 (mino1 _showRegionEnterBanner) — 탭 → 닫고 시작 ──
+func _show_region_enter_banner(def: Dictionary) -> void:
+	_clear_banner()
+	_chapter_clear_layer = CanvasLayer.new()
+	_chapter_clear_layer.layer = 14
+	_chapter_clear_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_chapter_clear_layer)
+	get_tree().paused = true
+	var lines := [
+		["%s %s" % [def.get("icon", ""), def.get("name", "")], 26, Color8(0xff, 0xe9, 0xa8), 0.42],
+		[str(def.get("desc", "")), 14, Color8(0xcc, 0xcc, 0xcc), 0.50],
+		["(화면을 탭하면 시작)", 14, Color8(0x88, 0x88, 0x88), 0.66],
+	]
+	_build_banner_labels(lines, false)
+	_banner_tap_action = "close"
+
+
+func _build_banner_labels(lines: Array, dim: bool) -> void:
+	var vp := get_viewport().get_visible_rect().size
+	# 어두운 오버레이 (Node2D _draw)
+	var ov := Node2D.new()
+	var alpha := 0.90 if dim else 0.70
+	ov.set_script(_make_banner_overlay_script(alpha))
+	_chapter_clear_layer.add_child(ov)
+	for ld in lines:
+		var lbl := Label.new()
+		if kfont:
+			lbl.add_theme_font_override("font", kfont)
+		lbl.add_theme_font_size_override("font_size", int(ld[1]))
+		lbl.add_theme_color_override("font_color", ld[2])
+		lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		lbl.add_theme_constant_override("outline_size", 4)
+		lbl.text = str(ld[0])
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl.size = Vector2(vp.x * 0.84, 40)
+		lbl.position = Vector2(vp.x * 0.08, vp.y * float(ld[3]))
+		_chapter_clear_layer.add_child(lbl)
+	# 탭 입력 처리 Control (전체 덮기)
+	var tap := Control.new()
+	tap.anchor_right = 1.0
+	tap.anchor_bottom = 1.0
+	tap.mouse_filter = Control.MOUSE_FILTER_STOP
+	tap.gui_input.connect(_on_banner_tap)
+	_chapter_clear_layer.add_child(tap)
+
+
+func _on_banner_tap(event: InputEvent) -> void:
+	var pressed: bool = (event is InputEventScreenTouch and event.pressed) or \
+		(event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed)
+	if not pressed:
+		return
+	var action := _banner_tap_action
+	_clear_banner()
+	get_tree().paused = false
+	if action == "to_worldmap":
+		if worldmap_panel:
+			worldmap_panel.open()
+	# action == "close" → 그냥 닫고 전투 시작
+
+
+func _clear_banner() -> void:
+	if _chapter_clear_layer and is_instance_valid(_chapter_clear_layer):
+		_chapter_clear_layer.queue_free()
+	_chapter_clear_layer = null
+	_banner_tap_action = ""
+
+
+func _make_banner_overlay_script(alpha: float) -> GDScript:
+	var src := """
+extends Node2D
+var ov_alpha = %f
+func _draw():
+	var vp = get_viewport().get_visible_rect().size
+	draw_rect(Rect2(0, 0, vp.x, vp.y), Color(0.0, 0.06, 0.04, ov_alpha), true)
+""" % alpha
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
 
 
 # ── 풀밭 텍스처 생성 (mino1: grass_soft, 오염된 땅) ───────────

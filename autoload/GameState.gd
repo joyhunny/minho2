@@ -9,6 +9,8 @@ var player: Dictionary = {}
 
 # 게임 진행 (mino1 this.gs 의 나머지 — 단계 진행하며 채운다)
 var region: int = 0           # 현재 지역 인덱스 (0=들판)
+var max_region: int = 0       # 해금된 가장 먼 지역 인덱스 (mino1 gs.maxRegion — 보스 잡으면 +1)
+var chapter: int = 1          # 난이도 스케일용 챕터 (mino1 gs.chapter — 보통 region+1)
 var difficulty: int = -1      # 난이도 인덱스 (-1=미선택, DIFFICULTY_DEFS 인덱스)
 var inventory: Array = []     # 보유 장비 [{item_id, rarity}, ...]
 var unlocked_regions: int = 1 # 해금된 지역 수 (보스 잡으면 +1)
@@ -47,6 +49,8 @@ func fresh_player() -> Dictionary:
 func new_game(difficulty_idx: int = 1) -> void:
 	player = fresh_player()
 	region = 0
+	max_region = 0
+	chapter = 1
 	difficulty = difficulty_idx
 	inventory = []
 	unlocked_regions = 1
@@ -58,6 +62,8 @@ func save_game() -> bool:
 	var data := {
 		"player": player,
 		"region": region,
+		"max_region": max_region,
+		"chapter": chapter,
 		"difficulty": difficulty,
 		"inventory": inventory,
 		"unlocked_regions": unlocked_regions,
@@ -93,6 +99,8 @@ func load_game() -> bool:
 			base[k] = saved_player[k]
 	player = base
 	region = int(parsed.get("region", 0))
+	max_region = int(parsed.get("max_region", region))
+	chapter = int(parsed.get("chapter", region + 1))
 	difficulty = int(parsed.get("difficulty", -1))
 	inventory = parsed.get("inventory", [])
 	unlocked_regions = int(parsed.get("unlocked_regions", 1))

@@ -90,6 +90,14 @@ func _draw() -> void:
 			draw_arc(tg.pos, tg.r, 0.0, TAU, 36, ic, 3.0)
 			var fc := Color(1.0, 0.2, 0.0, 0.08 * tg.alpha)
 			draw_circle(tg.pos, tg.r, fc)
+		elif tg.kind == "boss_line":
+			# 보스 돌진 예고선 (긴 굵은 선) — mino1 _telegraphGfx
+			var origin2: Vector2 = tg.pos
+			var dir2: Vector2 = tg.dir
+			var line_len: float = tg.get("len", 280.0)
+			var bc: Color = tg.get("color", Color(1.0, 0.67, 0.33))
+			bc.a = tg.get("alpha", 0.8)
+			draw_line(origin2, origin2 + dir2 * line_len, bc, 5.0)
 	telegraphs.clear()   # 매 프레임 적 AI 가 다시 채운다
 
 	# ── 슬래시 호 (3중 선) (mino1 _drawSlash) ──

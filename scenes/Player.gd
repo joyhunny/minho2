@@ -110,7 +110,9 @@ func _process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	var ts: float = main.time_scale if main else 1.0
 	var sp := float(GameState.player.get("sp", 165))
-	velocity = move_dir * sp * ts
+	# 지역 이동배율(늪=0.72 등) + 크리스탈 버프(+25%) (mino1 spMult)
+	var mm: float = main.player_move_mult() if main and main.has_method("player_move_mult") else 1.0
+	velocity = move_dir * sp * mm * ts
 	move_and_slide()
 
 	# 공격 룽지: 공격 방향으로 짧게 찌름 (mino1 _updateCombat lunge)
