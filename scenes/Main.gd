@@ -10,6 +10,10 @@ const FX_SCENE := preload("res://scenes/Fx.gd")
 const HUD_SCRIPT := preload("res://ui/HUD.gd")
 const LEVELUP_SCRIPT := preload("res://ui/LevelupPanel.gd")
 const STAT_SCRIPT := preload("res://ui/StatPanel.gd")
+const SKILLS_SCRIPT := preload("res://systems/Skills.gd")
+const JOB_SCRIPT := preload("res://ui/JobPanel.gd")
+const SKILL_TRAY_SCRIPT := preload("res://ui/SkillTray.gd")
+const SKILL_MENU_SCRIPT := preload("res://ui/SkillMenu.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
@@ -54,6 +58,13 @@ var stat_panel = null             # StatPanel (스탯 분배)
 # 레벨업 스킬 선택 등에 쓰는 결정론 RNG (mino1 this._rng) — 시드 저장값 기준
 var _core_rng: GameData.RNG = null
 
+# ── 전직·스킬 (S3) ─────────────────────────────────────────
+var skills: Node = null           # SkillSystem (스킬 엔진 — 투사체·메테오·장판·소환)
+var job_panel = null              # JobPanel (전직 선택창)
+var skill_tray = null             # SkillTray (우하단 스킬 버튼들)
+var skill_menu = null             # SkillMenu (전직 스킬 메뉴)
+var flash_node: Node2D = null     # 화면 전체 색 플래시 오버레이
+
 
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
@@ -68,9 +79,12 @@ func _ready() -> void:
 	_build_player()
 	_build_camera()
 	_build_fx()
+	_build_skills()
 	_build_joystick()
 	_build_attack_button()
 	_build_growth_ui()
+	_build_skill_ui()
+	_build_flash()
 	_build_info()
 
 
@@ -98,7 +112,7 @@ func _build_growth_ui() -> void:
 	stat_panel.set("main", self)
 	stat_layer.add_child(stat_panel)
 
-	# 레벨업 선택창 (제일 위, 게임 일시정지)
+	# 레벨업 선택창 (위, 게임 일시정지)
 	var lvl_layer := CanvasLayer.new()
 	lvl_layer.name = "LevelupLayer"
 	lvl_layer.layer = 10
@@ -109,6 +123,18 @@ func _build_growth_ui() -> void:
 	lvlup_panel.set_script(LEVELUP_SCRIPT)
 	lvlup_panel.set("main", self)
 	lvl_layer.add_child(lvlup_panel)
+
+	# 전직 선택창 (제일 위 — 레벨업보다 먼저 뜸, 게임 일시정지)
+	var job_layer := CanvasLayer.new()
+	job_layer.name = "JobLayer"
+	job_layer.layer = 11
+	job_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(job_layer)
+	job_panel = Control.new()
+	job_panel.name = "JobPanel"
+	job_panel.set_script(JOB_SCRIPT)
+	job_panel.set("main", self)
+	job_layer.add_child(job_panel)
 
 
 # 레벨업 스킬 선택에 쓰는 결정론 RNG (mino1 this._rng) — LevelupPanel 이 호출
@@ -170,6 +196,76 @@ func _build_fx() -> void:
 	fx_text_layer.name = "FloatTexts"
 	fx_text_layer.z_index = 3500
 	add_child(fx_text_layer)
+
+
+# ── 스킬 엔진 (월드 좌표 Node2D — 투사체·메테오·장판·소환) ──
+func _build_skills() -> void:
+	skills = Node2D.new()
+	skills.name = "Skills"
+	skills.set_script(SKILLS_SCRIPT)
+	skills.set("main", self)
+	skills.z_index = 2900     # 적 위, Fx(3000) 아래 정도
+	add_child(skills)
+
+
+# ── 스킬 UI: 우하단 스킬 트레이 + 전직 스킬 메뉴 ─────────────
+func _build_skill_ui() -> void:
+	# 스킬 트레이 (버튼들) — 공격 버튼과 같은 레이어대(작업대)
+	var tray_layer := CanvasLayer.new()
+	tray_layer.name = "SkillTrayLayer"
+	tray_layer.layer = 4
+	add_child(tray_layer)
+	skill_tray = Control.new()
+	skill_tray.name = "SkillTray"
+	skill_tray.set_script(SKILL_TRAY_SCRIPT)
+	skill_tray.set("main", self)
+	tray_layer.add_child(skill_tray)
+
+	# 전직 스킬 메뉴 (패널 — 일시정지)
+	var menu_layer := CanvasLayer.new()
+	menu_layer.name = "SkillMenuLayer"
+	menu_layer.layer = 9
+	menu_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(menu_layer)
+	skill_menu = Control.new()
+	skill_menu.name = "SkillMenu"
+	skill_menu.set_script(SKILL_MENU_SCRIPT)
+	skill_menu.set("main", self)
+	menu_layer.add_child(skill_menu)
+
+
+# ── 화면 전체 색 플래시 오버레이 (mino1 _flashGfx) ───────────
+func _build_flash() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "FlashLayer"
+	layer.layer = 7   # HUD·info 위, 스탯창 아래
+	add_child(layer)
+	flash_node = Node2D.new()
+	flash_node.name = "Flash"
+	flash_node.set_script(_make_flash_script())
+	flash_node.set("main", self)
+	layer.add_child(flash_node)
+
+
+func _make_flash_script() -> GDScript:
+	var src := """
+extends Node2D
+var main
+func _process(_d):
+	queue_redraw()
+func _draw():
+	if main == null or main.skills == null:
+		return
+	var a = main.skills.flash_alpha()
+	if a > 0.001:
+		var c = main.skills.flash_color
+		var vp = get_viewport().get_visible_rect().size
+		draw_rect(Rect2(0, 0, vp.x, vp.y), Color(c.r, c.g, c.b, a), true)
+"""
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
 
 
 func _build_camera() -> void:
@@ -325,6 +421,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_touch(id: int, pos: Vector2, pressed: bool) -> void:
 	var vp_w := get_viewport().get_visible_rect().size.x
 	if pressed:
+		# 스킬 버튼 먼저 검사 (mino1: 스킬 버튼 → 공격 → 이동 순) — 적중하면 소비
+		if skill_tray and skill_tray.try_hit(pos):
+			return
 		# 화면 왼쪽 60% 에서만 조이스틱 시작 (mino1 과 동일)
 		if not joy_active and pos.x < vp_w * 0.6:
 			joy_active = true
@@ -378,6 +477,10 @@ func _process(delta: float) -> void:
 
 	# ── HP/MP 자동 회복 (난이도 regen) ──
 	_update_regen(dt)
+
+	# ── 스킬 갱신 (쿨다운·투사체·메테오·장판·소환·마나회복·플래시) ──
+	if skills:
+		skills.update(dt)
 
 	# ── 데미지 숫자 갱신 ──
 	_update_float_texts(dt)
@@ -554,6 +657,85 @@ func _update_shake(delta: float) -> void:
 
 func get_kfont() -> Font:
 	return kfont
+
+
+# ── 전직 조건 확인 (LevelupPanel 이 레벨업 카드보다 먼저 호출) ──
+# 떠야 하면 JobPanel 을 띄우고 true 반환 (mino1 _checkJobUnlocks)
+func check_job_unlock() -> bool:
+	if job_panel:
+		return job_panel.check_unlock()
+	return false
+
+
+# ── 스킬 피드백 텍스트 (mino1 _showSkillFeedback) — 우하단 잠깐 ──
+func show_skill_feedback(msg: String, color: Color) -> void:
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_color_override("font_color", color)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	lbl.add_theme_constant_override("outline_size", 4)
+	lbl.text = msg
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var vp := get_viewport().get_visible_rect().size
+	lbl.size = Vector2(180, 28)
+	lbl.position = Vector2(vp.x - 280.0, vp.y - 240.0)
+	if info_label:
+		info_label.get_parent().add_child(lbl)
+	else:
+		add_child(lbl)
+	var tw := create_tween()
+	tw.tween_property(lbl, "position:y", lbl.position.y - 30.0, 0.7)
+	tw.parallel().tween_property(lbl, "modulate:a", 0.0, 0.7)
+	tw.tween_callback(func(): if is_instance_valid(lbl): lbl.queue_free())
+
+
+# ── 화면 가운데 큰 메시지 (전직 완료 등) (mino1 _applyJob msgTxt) ──
+func show_center_message(msg: String) -> void:
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 34)
+	lbl.add_theme_color_override("font_color", Color8(0xff, 0xdd, 0x44))
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	lbl.add_theme_constant_override("outline_size", 6)
+	lbl.text = msg
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var vp := get_viewport().get_visible_rect().size
+	lbl.size = Vector2(vp.x, 60)
+	lbl.position = Vector2(0, vp.y / 2.0 - 30.0)
+	lbl.modulate.a = 0.0
+	lbl.z_index = 100
+	# 일시정지에도 보이게 ALWAYS 레이어에 얹는다 (전직 패널이 일시정지 중일 수 있음)
+	var layer := CanvasLayer.new()
+	layer.layer = 12
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(layer)
+	layer.add_child(lbl)
+	var tw := get_tree().create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.tween_property(lbl, "modulate:a", 1.0, 0.4)
+	tw.parallel().tween_property(lbl, "position:y", lbl.position.y - 20.0, 0.4)
+	tw.tween_interval(1.2)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.6)
+	tw.parallel().tween_property(lbl, "position:y", lbl.position.y - 60.0, 0.6)
+	tw.tween_callback(func(): if is_instance_valid(layer): layer.queue_free())
+
+
+# ── 줍기 토스트 (무기 지급 등) (mino1 _showPickupToast) — 하단 안내 ──
+func show_pickup_toast(msg: String) -> void:
+	if info_label:
+		info_label.text = msg
+
+
+# 소환 슬라임용 텍스처 (slime 스프라이트 재사용)
+func _load_ally_tex() -> Texture2D:
+	var path := "res://assets/sprites/slime.png"
+	if ResourceLoader.exists(path):
+		return load(path)
+	return null
 
 
 # 데미지 숫자 띄우기 (mino1 _spawnFloatText)

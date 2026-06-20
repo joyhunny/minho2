@@ -38,9 +38,12 @@ func queue_levelup(count: int) -> void:
 	process_queue()
 
 
-# 큐 소진: 띄울 게 있으면 하나 띄우고 멈춘다 (mino1 _processLevelupQueue)
+# 큐 소진: 전직 우선 → 레벨업 카드. 띄울 게 있으면 하나 띄우고 멈춘다 (mino1 _processLevelupQueue)
 func process_queue() -> void:
 	if active:
+		return
+	# 전직(Lv10/25) 우선 — 떴으면 전직 후 JobPanel 이 이 함수를 다시 부른다 (mino1 _checkJobUnlocks)
+	if main and main.has_method("check_job_unlock") and main.check_job_unlock():
 		return
 	while pending > 0:
 		pending -= 1
