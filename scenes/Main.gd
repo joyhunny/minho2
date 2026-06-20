@@ -1362,7 +1362,9 @@ func enter_region(idx: int) -> void:
 	GameState.player["y"] = cy
 	spawn_timer = 0.0
 	GameState.save_game()
-	# 2장 이상(새 챕터)으로 들어가면 짧은 챕터 스토리, 1장(들판)은 지역 입장 배너
+	# 1장(들판)은 지역 이름 배너, 2장 이상 새 지역은 짧은 챕터 스토리(입장 톤).
+	# 챕터 스토리 문구는 '도착했다·앞으로 나아간다' 톤이라 안 잡은 보스를 잡았다고
+	# 말하지 않는다(서사 역전 방지). 보스 처치 회고는 챕터 클리어 패널이 맡는다.
 	if region >= 1:
 		_show_chapter_story(region + 1)
 	else:
@@ -1771,15 +1773,28 @@ func _show_chapter_story(chapter: int) -> void:
 	ov.set_script(_make_banner_overlay_script(0.88))
 	story_layer.add_child(ov)
 	var vp := get_viewport().get_visible_rect().size
-	# 챕터별 문구 (mino1)
+	# 지역 *입장* 시점의 짧은 스토리 — '도착했다'는 전제로 *앞으로* 나아가는 톤.
+	# (보스를 잡았다는 회고 톤은 입장에선 쓰지 않는다 — 아직 안 잡았으니 서사 역전.
+	#  '쓰러뜨렸다' 류는 보스 처치 후 챕터 클리어 패널이 따로 말한다.)
+	# chapter = region+1 로 들어오므로 region 인덱스로 환산해 지역별 문구를 고른다.
+	var region_idx := clampi(chapter - 1, 0, GameData.REGION_DEFS.size() - 1)
+	var rdef: Dictionary = GameData.REGION_DEFS[region_idx]
+	var region_name: String = rdef.get("name", "")
 	var line1 := ""
 	var line2 := ""
-	if chapter == 2:
-		line1 = "오염의 군주를 쓰러뜨렸다."
-		line2 = "하지만 더 깊은 곳에서 또 다른 기운이…"
-	else:
-		line1 = "정화의 빛이 퍼진다. 제%d장." % chapter
-		line2 = "하지만 오염은 더 짙어진다."
+	match region_idx:
+		1:
+			line1 = "오염이 더 짙은 곳, %s 에 들어선다." % region_name
+			line2 = "변이체들의 기운이 무겁다 — 정신을 바짝."
+		2:
+			line1 = "무너진 %s. 군주의 그림자가 어른거린다." % region_name
+			line2 = "여기를 지나야 끝에 닿는다."
+		3:
+			line1 = "마지막 땅, %s 의 문이 열렸다." % region_name
+			line2 = "오염의 군주가 저 안에서 기다린다."
+		_:
+			line1 = "%s 에 발을 들인다." % region_name
+			line2 = "정화의 여정은 계속된다."
 	var data := [
 		["— 제%d장 —" % chapter, 22, Color8(0xff, 0xcf, 0x5c), -80.0, true],
 		[line1, 16, Color8(0xcc, 0xcc, 0xcc), -30.0, false],
