@@ -5,14 +5,33 @@ extends Node2D
 
 const FONT_PATH := "res://fonts/Jua-Regular.ttf"
 const PLAYER_SCENE := preload("res://scenes/Player.tscn")
+const ENEMY_SCENE := preload("res://scenes/Enemy.tscn")
+const FX_SCENE := preload("res://scenes/Fx.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
 const JOY_RADIUS := 64.0      # 베이스 원 표시 반경
 
+# ── 전투 코어 상수 (mino1 play.js) ─────────────────────────
+const MAX_ENEMIES := 10        # 동시 최대 적 수
+const SPAWN_INTERVAL := 1.4    # 스폰 간격(초)
+
 var kfont: Font
 var player: CharacterBody2D
 var camera: Camera2D
+
+# ── 전투/연출 상태 ─────────────────────────────────────────
+var enemies: Array = []        # 살아있는 Enemy 노드들
+var spawn_timer := 0.0
+var time_scale := 1.0          # 히트스톱용 시간 배율 (1=정상, 0.08=정지에 가까움)
+var hitstop_t := 0.0           # 남은 히트스톱 시간
+var fx: Node2D = null          # Fx 레이어
+var fx_text_layer: Node2D = null  # 데미지 숫자(월드 라벨) 부모
+var float_texts: Array = []    # [{label, vel, life, t, wobble, base_x}]
+var shake_t := 0.0            # 카메라 흔들림 남은 시간
+var shake_amp := 0.0          # 흔들림 세기
+var atk_btn_pressed := false   # 공격 버튼 눌림
+var rng := RandomNumberGenerator.new()
 
 # 가상 조이스틱 상태 (mino1: this.joy)
 var joy_active := false
@@ -29,11 +48,17 @@ var info_label: Label
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
 		kfont = load(FONT_PATH)
+	rng.randomize()
+	# 난이도 미선택이면 '보통'으로 폴백 (난이도 선택 화면은 S5)
+	if GameState.difficulty < 0:
+		GameState.difficulty = 1
 
 	_build_world()
 	_build_player()
 	_build_camera()
+	_build_fx()
 	_build_joystick()
+	_build_attack_button()
 	_build_info()
 
 
@@ -72,7 +97,23 @@ func _build_world() -> void:
 
 func _build_player() -> void:
 	player = PLAYER_SCENE.instantiate()
+	player.main = self
 	add_child(player)
+
+
+# ── 이펙트 레이어 (파티클·임팩트·예고·슬래시 + 데미지 숫자) ──
+func _build_fx() -> void:
+	fx = Node2D.new()
+	fx.name = "Fx"
+	fx.set_script(FX_SCENE)
+	fx.set("main", self)
+	fx.z_index = 3000        # 적(y<=2200)보다 위 (z_index 최대 4096)
+	add_child(fx)
+	# 데미지 숫자(월드 라벨)는 적·파티클보다 위
+	fx_text_layer = Node2D.new()
+	fx_text_layer.name = "FloatTexts"
+	fx_text_layer.z_index = 3500
+	add_child(fx_text_layer)
 
 
 func _build_camera() -> void:
@@ -138,8 +179,68 @@ func _build_info() -> void:
 	info_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	info_label.add_theme_constant_override("outline_size", 6)
 	info_label.position = Vector2(24, 24)
-	info_label.text = "왼쪽 화면을 끌어 이동  |  WASD·화살표"
+	info_label.text = "왼쪽=이동(WASD)  |  오른쪽 버튼=공격(스페이스)"
 	layer.add_child(info_label)
+
+
+# ── 공격 버튼 (오른쪽 아래, 터치) (mino1 공격 버튼) ──────────
+var atk_btn: TouchScreenButton
+func _build_attack_button() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "AtkLayer"
+	add_child(layer)
+
+	var ctrl := Control.new()
+	ctrl.name = "AtkButton"
+	ctrl.anchor_left = 1.0
+	ctrl.anchor_top = 1.0
+	ctrl.anchor_right = 1.0
+	ctrl.anchor_bottom = 1.0
+	ctrl.offset_left = -180.0
+	ctrl.offset_top = -200.0
+	ctrl.offset_right = -40.0
+	ctrl.offset_bottom = -60.0
+	ctrl.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(ctrl)
+
+	# 원형 버튼 그림 (코드 Node2D _draw)
+	var draw_node := Node2D.new()
+	draw_node.set_script(_make_atk_draw_script())
+	draw_node.set("ctrl", ctrl)
+	ctrl.add_child(draw_node)
+
+	ctrl.gui_input.connect(_on_atk_input)
+	# 손가락이 버튼 밖으로 나가도 떼면 풀리게
+	ctrl.mouse_exited.connect(func(): pass)
+	atk_label_ctrl = ctrl
+
+
+var atk_label_ctrl: Control
+func _on_atk_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT):
+		atk_btn_pressed = event.pressed
+
+
+func _make_atk_draw_script() -> GDScript:
+	var src := """
+extends Node2D
+var ctrl
+func _process(_d):
+	queue_redraw()
+func _draw():
+	if ctrl == null:
+		return
+	var c = ctrl.size / 2.0
+	var r = min(ctrl.size.x, ctrl.size.y) / 2.0
+	draw_circle(c, r, Color(0.9, 0.35, 0.3, 0.55))
+	draw_arc(c, r, 0.0, TAU, 40, Color(1, 1, 1, 0.5), 3.0)
+	# 칼 모양 간단 표시 (대각선 두 선)
+	draw_line(c + Vector2(-r*0.3, r*0.3), c + Vector2(r*0.3, -r*0.3), Color(1,1,1,0.85), 5.0)
+"""
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
 
 
 # ── 입력: 가상 조이스틱 ─────────────────────────────────────
@@ -188,10 +289,346 @@ func _release_joy() -> void:
 	joy_vec = Vector2.ZERO
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# 조이스틱 방향을 플레이어에 전달
 	if player:
 		player.joy_vec = joy_vec if joy_active else Vector2.ZERO
+
+	# ── 히트스톱: 시간 배율 (mino1 _hitstopT) ──
+	if hitstop_t > 0.0:
+		hitstop_t -= delta   # 히트스톱 타이머는 실시간으로 흐른다
+		time_scale = 0.08
+		if hitstop_t <= 0.0:
+			hitstop_t = 0.0
+			time_scale = 1.0
+	else:
+		time_scale = 1.0
+
+	var dt := delta * time_scale
+
+	# ── 스폰 ──
+	_update_spawn(dt)
+
+	# ── 전투 판정 (공격 입력 → 명중) ──
+	_update_combat(dt)
+
+	# ── HP/MP 자동 회복 (난이도 regen) ──
+	_update_regen(dt)
+
+	# ── 데미지 숫자 갱신 ──
+	_update_float_texts(dt)
+
+	# ── 슬래시 이펙트: 플레이어 위치 따라 ──
+	if player and player.slash_t > 0.0:
+		fx.slash = {"pos": player.global_position, "face": player.face,
+			"range": float(GameState.player.get("atkRange", 64)), "t": player.slash_t}
+
+	# ── 카메라 흔들림 ──
+	_update_shake(delta)
+
+	# 죽은 적 목록 정리
+	for i in range(enemies.size() - 1, -1, -1):
+		var e = enemies[i]
+		if not is_instance_valid(e) or e.dead:
+			enemies.remove_at(i)
+
+
+# ── 스폰 타이머 (mino1 _updateSpawn) ───────────────────────
+func _update_spawn(dt: float) -> void:
+	spawn_timer -= dt
+	if spawn_timer <= 0.0 and enemies.size() < MAX_ENEMIES:
+		spawn_timer = SPAWN_INTERVAL
+		_spawn_enemy()
+
+
+# ── 적 한 마리 스폰 (mino1 _spawnEnemy) ────────────────────
+func _spawn_enemy() -> void:
+	var p: Dictionary = GameState.player
+	var region_idx: int = clampi(GameState.region, 0, GameData.REGION_DEFS.size() - 1)
+	var region_def: Dictionary = GameData.REGION_DEFS[region_idx]
+	# 결정론 RNG 가 아니라 일반 RNG 사용(런타임 스폰; core 공식과 분리)
+	var grng := GameData.make_rng(rng.randi())
+	var type_key: String = GameData.pick_enemy_type(grng, int(p.get("lvl", 1)), region_def.get("enemies"))
+	var def: Dictionary = GameData.ENEMY_DEFS[type_key]
+
+	# 플레이어 주변 화면 밖 (mino1: 280~460px)
+	var ang := rng.randf() * TAU
+	var dist := 280.0 + rng.randf() * 180.0
+	var ex := clampf(p["x"] + cos(ang) * dist, 40.0, GameData.WORLD_W - 40.0)
+	var ey := clampf(p["y"] + sin(ang) * dist, 40.0, GameData.WORLD_H - 40.0)
+
+	# 챕터·레벨·난이도 배율 (mino1 그대로). region 인덱스를 챕터로 사용(1부터).
+	var chapter: int = region_idx + 1
+	var chapter_mult: float = pow(1.25, chapter - 1)
+	var lvl_mult: float = 1.0 + maxf(0.0, float(p.get("lvl", 1)) - 1.0) * 0.04
+	var diff: Dictionary = GameData.DIFFICULTY_DEFS[clampi(GameState.difficulty, 0, GameData.DIFFICULTY_DEFS.size() - 1)]
+	var scaled_hp: float = round(float(def["hp"]) * chapter_mult * float(diff["hp_mult"]))
+	var scaled_dmg: float = round(float(def["dmg"]) * chapter_mult * lvl_mult * float(diff["dmg_mult"]))
+	var scaled_xp: int = int(round(float(def["xp"]) * chapter_mult))
+	var scaled_sp: float = round(float(def["sp"]) * pow(1.05, chapter - 1))
+
+	# 엘리트 판정 (지역 elite_rate)
+	var elite_rate: float = float(region_def.get("elite_rate", 0.08))
+	var is_elite: bool = rng.randf() < elite_rate
+
+	var stats := {
+		"hp": scaled_hp * 2.5 if is_elite else scaled_hp,
+		"maxhp": scaled_hp * 2.5 if is_elite else scaled_hp,
+		"sp": scaled_sp,
+		"dmg": scaled_dmg * 1.5 if is_elite else scaled_dmg,
+		"xp": scaled_xp * 2 if is_elite else scaled_xp,
+		"gold_base": int(GameData.GOLD_DROP.get(type_key, 3)),
+		"is_elite": is_elite,
+	}
+
+	var enemy = ENEMY_SCENE.instantiate()
+	enemy.global_position = Vector2(ex, ey)
+	enemy.setup(type_key, stats, player, self)
+	add_child(enemy)
+	enemies.append(enemy)
+
+
+# ── 전투: 공격 입력 → 명중 판정 (mino1 _updateCombat) ──────
+func _update_combat(dt: float) -> void:
+	if player == null:
+		return
+	var p: Dictionary = GameState.player
+
+	# 히트스톱 중엔 공격 판정 스킵 (mino1)
+	if hitstop_t > 0.0:
+		return
+
+	var want := atk_btn_pressed or Input.is_key_pressed(KEY_SPACE)
+	if not want or not player.can_attack():
+		return
+
+	# 공격 실행 (쿨다운·스윙·룽지·슬래시)
+	player.start_attack()
+
+	var atk_range := float(p.get("atkRange", 64))
+	var atk_pow := float(p.get("atkPow", 11))
+	var face: int = player.face
+	var hit_count := 0
+
+	for e in enemies:
+		if not is_instance_valid(e) or e.dead or e.hp <= 0.0:
+			continue
+		var ddx: float = e.global_position.x - player.global_position.x
+		var ddy: float = e.global_position.y - player.global_position.y
+		var d := sqrt(ddx * ddx + ddy * ddy)
+		# 범위 안 + 바라보는 방향 앞쪽 (mino1: ddx*face >= -16)
+		if d < atk_range and ddx * face >= -16.0:
+			# 치명타 (critical 스킬 — 스킬 시스템은 S2, 지금은 0)
+			var crit_chance := 0.15 * float(p.get("skills", {}).get("critical", 0))
+			var is_crit := crit_chance > 0.0 and rng.randf() < crit_chance
+			var dmg := atk_pow
+			if is_crit:
+				dmg *= 2.0
+			dmg = round(dmg)
+
+			e.take_hit(dmg, is_crit, player.global_position)
+			fx.add_impact_hit(e.global_position, is_crit)
+			spawn_float_text(e.global_position, str(int(dmg)), is_crit)
+			hit_count += 1
+
+	# 히트스톱 (명중 시 0.04초) (mino1)
+	if hit_count > 0:
+		hitstop_t = 0.04
+		# 손맛: 명중 순간 미세 카메라 흔들림
+		add_shake(0.10, 3.5)
+
+
+# ── HP/MP 자동 회복 (mino1 _updateRegen) ───────────────────
+var _regen_timer := 0.0
+func _update_regen(dt: float) -> void:
+	var p: Dictionary = GameState.player
+	_regen_timer += dt
+	if _regen_timer >= 1.0:
+		_regen_timer -= 1.0
+		var diff: Dictionary = GameData.DIFFICULTY_DEFS[clampi(GameState.difficulty, 0, GameData.DIFFICULTY_DEFS.size() - 1)]
+		var regen := float(diff.get("regen", 2))
+		if regen > 0.0 and float(p["hp"]) < float(p["maxhp"]):
+			p["hp"] = minf(float(p["maxhp"]), float(p["hp"]) + regen)
+		if float(p["mp"]) < float(p["maxmp"]):
+			p["mp"] = minf(float(p["maxmp"]), float(p["mp"]) + 2.0)
+
+
+# ── 카메라 흔들림 ──────────────────────────────────────────
+func add_shake(dur: float, amp: float) -> void:
+	shake_t = maxf(shake_t, dur)
+	shake_amp = maxf(shake_amp, amp)
+
+
+func _update_shake(delta: float) -> void:
+	if camera == null:
+		return
+	if shake_t > 0.0:
+		shake_t -= delta
+		var k := maxf(0.0, shake_t)
+		var a := shake_amp * (k / 0.2 if k < 0.2 else 1.0)
+		camera.offset = Vector2(rng.randf_range(-a, a), rng.randf_range(-a, a))
+		if shake_t <= 0.0:
+			shake_t = 0.0
+			shake_amp = 0.0
+			camera.offset = Vector2.ZERO
+	else:
+		camera.offset = Vector2.ZERO
+
+
+# ════════════════════════════════════════════════════════════
+#  적/플레이어가 호출하는 콜백 (FX·보상·예고)
+# ════════════════════════════════════════════════════════════
+
+func get_kfont() -> Font:
+	return kfont
+
+
+# 데미지 숫자 띄우기 (mino1 _spawnFloatText)
+func spawn_float_text(world_pos: Vector2, value: String, is_crit: bool) -> void:
+	var cap := 14
+	if float_texts.size() >= cap:
+		var oldest = float_texts.pop_front()
+		if oldest and is_instance_valid(oldest.label):
+			oldest.label.queue_free()
+
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 34 if is_crit else 22)
+	lbl.add_theme_color_override("font_color", Color8(0xff, 0xee, 0x00) if is_crit else Color.WHITE)
+	lbl.add_theme_color_override("font_outline_color", Color8(0x1a, 0x1a, 0x1a))
+	lbl.add_theme_constant_override("outline_size", 6 if is_crit else 4)
+	lbl.text = value
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var off_x := (rng.randf() - 0.5) * 24.0
+	lbl.position = Vector2(world_pos.x + off_x - 30.0, world_pos.y - 20.0)
+	fx_text_layer.add_child(lbl)
+
+	float_texts.append({
+		"label": lbl,
+		"vel": -130.0 if is_crit else -90.0,
+		"life": 1.0 if is_crit else 0.75,
+		"t": 0.0,
+		"wobble": 5.0 if is_crit else 0.0,
+		"base_x": lbl.position.x,
+	})
+
+
+# 데미지 숫자 갱신 (mino1 _updateFloatTexts: 중력+치명타 흔들림)
+func _update_float_texts(dt: float) -> void:
+	for i in range(float_texts.size() - 1, -1, -1):
+		var f: Dictionary = float_texts[i]
+		var lbl = f.label
+		if not is_instance_valid(lbl):
+			float_texts.remove_at(i)
+			continue
+		f.t += dt
+		lbl.position.y += f.vel * dt
+		f.vel += 220.0 * dt
+		if f.wobble > 0.0:
+			lbl.position.x = f.base_x + sin(f.t * 28.0) * f.wobble * maxf(0.0, 1.0 - f.t / f.life)
+		var alpha := maxf(0.0, 1.0 - f.t / f.life)
+		lbl.modulate.a = alpha
+		if f.t >= f.life:
+			lbl.queue_free()
+			float_texts.remove_at(i)
+
+
+# 임팩트 원 (적 사망 시 등) (mino1 _spawnImpact / death flash)
+func spawn_impact(pos: Vector2, r: float, color: Color) -> void:
+	if fx:
+		fx.add_impact(pos, r, color)
+
+
+# 예고선 (boar 돌진) — 적 AI 가 매 프레임 호출
+func draw_telegraph_dash(origin: Vector2, dir: Vector2, prog: float) -> void:
+	if fx:
+		fx.telegraphs.append({"kind": "dash", "pos": origin, "dir": dir, "prog": prog})
+
+
+# 예고 원 (croc 매복) — 적 AI 가 매 프레임 호출
+func draw_telegraph_circle(center: Vector2, radius: float, alpha: float) -> void:
+	if fx:
+		fx.telegraphs.append({"kind": "circle", "pos": center, "r": radius, "alpha": alpha})
+
+
+# ── 적 사망 보상 (mino1 _updateEnemies 의 deadList 처리) ─────
+func on_enemy_died(enemy: Node, pos: Vector2) -> void:
+	var is_elite: bool = enemy.is_elite
+	# 처치 파티클
+	var part_color := Color8(0xff, 0xdd, 0x22) if is_elite else Color8(0xff, 0xcf, 0x5c)
+	fx.add_particles(pos, part_color, 35 if is_elite else 22)
+	fx.add_particles(pos, Color8(0xff, 0x88, 0x44), 16 if is_elite else 10)
+
+	GameState.player["kills"] = int(GameState.player.get("kills", 0)) + 1
+	_gain_xp(enemy.xp)
+
+	# 골드 드랍 (적 기본 + 엘리트 보너스)
+	var base_gold: int = enemy.gold_base + int(floor(rng.randf() * 3.0))
+	var gold_amt: int = int(round(base_gold * 3.5)) if is_elite else base_gold
+	GameState.player["gold"] = int(GameState.player.get("gold", 0)) + gold_amt
+	# 골드 텍스트 (노랑)
+	_spawn_gold_text(pos, gold_amt, is_elite)
+
+
+func _spawn_gold_text(pos: Vector2, amt: int, is_elite: bool) -> void:
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 18 if is_elite else 13)
+	lbl.add_theme_color_override("font_color", Color8(0xff, 0xdd, 0x22))
+	lbl.add_theme_color_override("font_outline_color", Color8(0x4a, 0x30, 0x00))
+	lbl.add_theme_constant_override("outline_size", 3)
+	lbl.text = "+%dG" % amt
+	lbl.position = Vector2(pos.x - 20.0 + (rng.randf() - 0.5) * 20.0, pos.y - 28.0)
+	fx_text_layer.add_child(lbl)
+	float_texts.append({"label": lbl, "vel": -60.0, "life": 0.8, "t": 0.0, "wobble": 0.0, "base_x": lbl.position.x})
+
+
+# ── 경험치/레벨업 (mino1 _gainXP — 스탯 누적은 보존, 스킬창은 S2) ──
+func _gain_xp(amount: int) -> void:
+	var p: Dictionary = GameState.player
+	p["xp"] = int(p.get("xp", 0)) + maxi(1, int(round(amount * float(p.get("xpGainMult", 1.0)))))
+	var leveled := 0
+	while int(p.get("xpNext", 20)) > 0 and int(p["xp"]) >= int(p["xpNext"]):
+		p["xp"] = int(p["xp"]) - int(p["xpNext"])
+		p["lvl"] = int(p["lvl"]) + 1
+		p["xpNext"] = int(round(int(p["xpNext"]) * 1.5))
+		p["maxhp"] = float(p["maxhp"]) + 10.0
+		p["atkPow"] = float(p["atkPow"]) + 2.0
+		p["hp"] = p["maxhp"]      # 레벨업 시 전체 회복
+		p["mp"] = p["maxmp"]
+		p["statPoints"] = int(p.get("statPoints", 0)) + 3
+		leveled += 1
+	if leveled > 0:
+		GameState.save_game()
+		# 레벨업 손맛: 노란 파티클 + 흔들림 (스킬 선택창은 S2)
+		fx.add_particles(player.global_position, Color8(0xff, 0xcf, 0x5c), 24)
+		spawn_impact(player.global_position, 70.0, Color8(0xff, 0xcf, 0x5c))
+		add_shake(0.15, 4.0)
+
+
+# ── 플레이어 피격 콜백 (mino1: hurt 사운드·흔들림·게임오버) ──
+func on_player_hurt(real: float) -> void:
+	add_shake(0.18, 6.0)
+	var p: Dictionary = GameState.player
+	if float(p["hp"]) <= 0.0:
+		_on_game_over()
+
+
+# ── 게임오버 (S1: 같은 자리에서 부활 — 완전한 게임오버 화면은 S5/S6) ──
+func _on_game_over() -> void:
+	# 적 전부 제거 + 풀 회복 + 짧은 무적 (임시 처리)
+	for e in enemies:
+		if is_instance_valid(e):
+			e.queue_free()
+	enemies.clear()
+	var p: Dictionary = GameState.player
+	p["hp"] = p["maxhp"]
+	p["inv"] = 2.0
+	add_shake(0.4, 12.0)
+	if info_label:
+		info_label.text = "쓰러졌다! 잠시 무적 — 다시 싸우자"
 
 
 # ── 풀밭 텍스처 생성 (mino1: grass_soft, 오염된 땅) ───────────
