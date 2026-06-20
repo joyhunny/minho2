@@ -1,0 +1,22 @@
+# Godot 4+ specific ignores
+.godot/
+.import/
+
+# Godot-v3 export presets / build outputs
+export.cfg
+export_presets.cfg
+
+# Exported / build artifacts
+*.pck
+*.zip
+*.exe
+*.dmg
+*.apk
+*.aab
+build/
+exports/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
