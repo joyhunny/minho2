@@ -2,9 +2,7 @@
 .godot/
 .import/
 
-# Godot-v3 export presets / build outputs
-export.cfg
-export_presets.cfg
+# (export_presets.cfg는 일부러 커밋한다 — 배포 설정 재현용)
 
 # Exported / build artifacts
 *.pck

@@ -3,9 +3,10 @@ extends Node2D
 # minho2 — 첫 Godot 시범 게임: "떨어지는 별 받기"
 # (아직 그림 없음 — 일부러 색 도형으로만. 에셋은 나중에 입힌다.)
 # 조작: 왼/오른 화살표 또는 A·D 키, 또는 화면을 손으로 누르거나 끌기.
-# ※ 게임 화면 글자는 영어로 둠 — Godot 기본 폰트엔 한글 글리프가 없어 깨질 수 있어서.
-#    (나중에 한글 폰트 파일을 넣으면 한글로 바꾼다.)
 
+const FONT_PATH := "res://fonts/Jua-Regular.ttf"
+
+var kfont: Font
 var screen_size: Vector2
 var basket: ColorRect
 var basket_w := 150.0
@@ -28,6 +29,8 @@ var target_x := -1.0   # 손가락/마우스로 이동할 목표 x (-1 = 없음)
 
 func _ready() -> void:
 	screen_size = get_viewport_rect().size
+	if ResourceLoader.exists(FONT_PATH):
+		kfont = load(FONT_PATH)
 
 	# 배경
 	var bg := ColorRect.new()
@@ -43,32 +46,36 @@ func _ready() -> void:
 	add_child(basket)
 
 	# 점수
-	score_label = Label.new()
-	score_label.add_theme_font_size_override("font_size", 56)
+	score_label = _make_label(56)
 	score_label.position = Vector2(28, 24)
 	add_child(score_label)
 
 	# 안내
-	info_label = Label.new()
-	info_label.add_theme_font_size_override("font_size", 28)
-	info_label.position = Vector2(28, 96)
+	info_label = _make_label(30)
+	info_label.position = Vector2(28, 100)
 	add_child(info_label)
 
 	# 게임 오버 (가운데)
-	over_label = Label.new()
-	over_label.add_theme_font_size_override("font_size", 64)
+	over_label = _make_label(64)
 	over_label.position = Vector2(0, screen_size.y * 0.4)
-	over_label.size = Vector2(screen_size.x, 160)
+	over_label.size = Vector2(screen_size.x, 200)
 	over_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	over_label.visible = false
 	add_child(over_label)
 
 	_update_labels()
 
+func _make_label(font_size: int) -> Label:
+	var l := Label.new()
+	if kfont:
+		l.add_theme_font_override("font", kfont)
+	l.add_theme_font_size_override("font_size", font_size)
+	return l
+
 func _update_labels() -> void:
-	score_label.text = "Score: %d" % score
-	info_label.text = "Catch the stars!   arrows / A D / tap   |   Lives: %d" % lives
-	over_label.text = "GAME OVER\n(tap or Enter)"
+	score_label.text = "점수: %d" % score
+	info_label.text = "별을 받아라!   ← →  또는 화면 터치   |   생명: %d" % lives
+	over_label.text = "게임 오버!\n(화면 터치 또는 Enter)"
 	over_label.visible = game_over
 
 func _input(event: InputEvent) -> void:
