@@ -15,6 +15,8 @@ var difficulty: int = -1      # 난이도 인덱스 (-1=미선택, DIFFICULTY_DE
 var inventory: Array = []     # 보유 장비 [{item_id, rarity}, ...]
 var unlocked_regions: int = 1 # 해금된 지역 수 (보스 잡으면 +1)
 var seed_val: int = 12345     # 결정론 RNG 시드
+var muted: bool = false       # 소리 끄기 (S6 — Audio 가 읽고/저장)
+var seen_intro: bool = false  # 인트로 스토리를 봤나 (S6 — 한 세션 한 번)
 
 
 func _ready() -> void:
@@ -68,6 +70,7 @@ func save_game() -> bool:
 		"inventory": inventory,
 		"unlocked_regions": unlocked_regions,
 		"seed_val": seed_val,
+		"muted": muted,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -105,6 +108,7 @@ func load_game() -> bool:
 	inventory = parsed.get("inventory", [])
 	unlocked_regions = int(parsed.get("unlocked_regions", 1))
 	seed_val = int(parsed.get("seed_val", 12345))
+	muted = bool(parsed.get("muted", false))
 	return true
 
 

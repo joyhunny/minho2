@@ -304,6 +304,7 @@ func _cast_summon_ally() -> void:
 		return
 	_spawn_ally_slime(pl.global_position.x + (randf() - 0.5) * 60.0, pl.global_position.y + (randf() - 0.5) * 60.0)
 	main.fx.add_particles(pl.global_position, Color8(0x55, 0xcc, 0x88), 12)
+	Audio.tame()   # 슬라임 길들임 소리 (mino1 MinoSound.tame)
 
 
 # ════════════════════════════════════════════════════════════

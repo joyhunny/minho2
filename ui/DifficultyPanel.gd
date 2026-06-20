@@ -105,6 +105,7 @@ func _on_input(event: InputEvent) -> void:
 
 
 func _pick(idx: int) -> void:
+	Audio.ui_tap()
 	GameState.difficulty = idx
 	GameState.save_game()
 	_close()

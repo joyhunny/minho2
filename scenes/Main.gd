@@ -22,6 +22,7 @@ const TERRAIN_SCRIPT := preload("res://systems/Terrain.gd")
 const BOSS_SCENE := preload("res://scenes/Boss.tscn")
 const DIFFICULTY_SCRIPT := preload("res://ui/DifficultyPanel.gd")
 const WORLDMAP_SCRIPT := preload("res://ui/WorldMapPanel.gd")
+const COMPANION_SCRIPT := preload("res://scenes/Companion.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
@@ -89,6 +90,18 @@ var worldmap_panel = null         # WorldMapPanel (세계 지도)
 var _chapter_clear_layer: CanvasLayer = null  # 챕터 클리어/지역 입장 배너(탭 대기)
 var _banner_tap_action := ""      # "" | "to_worldmap" — 배너 탭 시 동작
 
+# ── 연출·사운드 마감 (S6) ───────────────────────────────────
+var companion: Node2D = null      # 동료 카피바라 (따라오기·힐·말풍선)
+var intro_layer: CanvasLayer = null   # 인트로 스토리 오버레이
+var story_layer: CanvasLayer = null   # 챕터 스토리 오버레이
+# 이스터에그 상태 (mino1 _egg*)
+var egg_tl_used := false          # 좌상단 +10 (1회)
+var egg_used := false             # 좌하단 12연타 +12 (1회)
+var egg_attack_count := 0
+var egg_attack_timer := 0.0
+var egg_prev_atk := false
+var sound_btn_ctrl: Control = null
+
 
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
@@ -115,13 +128,25 @@ func _ready() -> void:
 	_build_region_ui()       # 난이도 선택창 + 세계 지도 + 처음부터 버튼
 	_build_flash()
 	_build_info()
+	_build_companion()       # 동료 카피바라 (player 뒤)
+	_build_mino_sig()        # mino 시그니처 워터마크 (우측)
+	_build_sound_button()    # 소리 켜고/끄기 토글
+	_build_overlay_ticker()  # 인트로/챕터 스토리 페이드 (일시정지 중에도 도는 ALWAYS 틱)
 
 	# 보스 등장 플래그: 이 지역에서 아직 안 잡았으면 false (저장과 무관, 세션 단위)
 	boss_spawned = false
 
-	# 난이도 미선택(첫 실행)이면 난이도 선택창을 먼저 띄운다 (mino1 인트로 흐름)
-	if GameState.difficulty < 0 and diff_panel:
-		diff_panel.open()
+	# BGM 시작 (음소거면 알아서 안 남)
+	Audio.start_bgm()
+
+	# ── 화면 흐름 (mino1): 인트로 → (난이도) → 게임 ──
+	# 첫 실행(난이도 미선택)이면: 인트로 스토리를 보여주고, 끝나면 난이도 선택창.
+	# 이미 진행 중(난이도 선택됨)이면 바로 게임.
+	if GameState.difficulty < 0:
+		_show_intro()        # 끝나면(_end_intro) 난이도 선택창을 띄움
+	elif not GameState.seen_intro:
+		# 난이도는 정해졌지만 이번 세션 인트로를 아직 안 봤으면 한 번 보여준다
+		_show_intro()
 
 
 # ── 성장 UI: HUD + 레벨업 선택창 + 스탯 분배창 (S2) ──────────
@@ -695,6 +720,9 @@ func _process(delta: float) -> void:
 	# ── 카메라 흔들림 ──
 	_update_shake(delta)
 
+	# ── 이스터에그 (좌상단 +10 / 좌하단 12연타 +12) ──
+	_update_easter_egg(dt)
+
 	# 죽은 적 목록 정리
 	for i in range(enemies.size() - 1, -1, -1):
 		var e = enemies[i]
@@ -773,6 +801,7 @@ func _update_combat(dt: float) -> void:
 
 	# 공격 실행 (쿨다운·스윙·룽지·슬래시)
 	player.start_attack()
+	Audio.attack()   # 검 휘두름 소리 (mino1 MinoSound.attack)
 
 	var atk_range := float(p.get("atkRange", 64))
 	var atk_pow := float(p.get("atkPow", 11))
@@ -807,6 +836,10 @@ func _update_combat(dt: float) -> void:
 			e.take_hit(dmg, is_crit, player.global_position)
 			fx.add_impact_hit(e.global_position, is_crit)
 			spawn_float_text(e.global_position, str(int(dmg)), is_crit)
+			if is_crit:
+				Audio.crit()   # 치명타 소리 (mino1)
+			else:
+				Audio.hit()    # 타격 소리 (mino1)
 			hit_count += 1
 
 			# 생명 흡수 스킬 (mino1: 명중당 +1.5 × 스택)
@@ -842,6 +875,10 @@ func _update_combat(dt: float) -> void:
 				bdmg *= vuln
 			bdmg = round(bdmg)
 			boss.take_hit(bdmg)
+			if bis_crit or vuln > 1.0:
+				Audio.crit()
+			else:
+				Audio.hit()
 			fx.add_impact_hit(boss.global_position + Vector2(0, -30), bis_crit or vuln > 1.0)
 			spawn_float_text(boss.global_position + Vector2(0, -50), str(int(bdmg)), bis_crit or vuln > 1.0)
 			if vuln > 1.0:
@@ -1088,6 +1125,7 @@ func on_enemy_died(enemy: Node, pos: Vector2) -> void:
 	fx.add_particles(pos, part_color, 35 if is_elite else 22)
 	fx.add_particles(pos, Color8(0xff, 0x88, 0x44), 16 if is_elite else 10)
 
+	Audio.kill()   # 처치 소리 (mino1 MinoSound.kill)
 	GameState.player["kills"] = int(GameState.player.get("kills", 0)) + 1
 	_gain_xp(enemy.xp)
 
@@ -1150,6 +1188,7 @@ func _gain_xp(amount: int) -> void:
 		fx.add_particles(player.global_position, Color8(0xff, 0xcf, 0x5c), 24)
 		spawn_impact(player.global_position, 70.0, Color8(0xff, 0xcf, 0x5c))
 		add_shake(0.15, 4.0)
+		Audio.levelup()   # 레벨업 아르페지오 (mino1 MinoSound.levelup)
 		# ★ 한 번에 여러 레벨이 올라도 스킬 선택창은 '하나씩' 큐로 (mino1 _pendingLvlups)
 		if lvlup_panel:
 			lvlup_panel.queue_levelup(leveled)
@@ -1183,6 +1222,7 @@ func apply_skill(id: String) -> void:
 # ── 플레이어 피격 콜백 (mino1: hurt 사운드·흔들림·게임오버) ──
 func on_player_hurt(real: float) -> void:
 	add_shake(0.18, 6.0)
+	Audio.hurt()   # 주인공 피격 소리 (mino1 MinoSound.hurt)
 	var p: Dictionary = GameState.player
 	if float(p["hp"]) <= 0.0:
 		_on_game_over()
@@ -1230,6 +1270,7 @@ func hazard_damage(raw: float, inv_dur: float, part_color: Color, prefix: String
 	if part_color != Color.WHITE:
 		fx.add_particles(player.global_position, part_color, 5)
 	add_shake(0.16, 5.5)
+	Audio.hurt()   # 보스 궁극기·독장판 피해 소리 (mino1)
 	if float(p["hp"]) <= 0.0:
 		_on_game_over()
 
@@ -1262,6 +1303,7 @@ func _spawn_boss() -> void:
 # ── 보스 처치 보상 (Boss._die 가 호출) — 전설급 드랍 + 골드 + 챕터 클리어 ──
 func on_boss_died(pos: Vector2) -> void:
 	var p: Dictionary = GameState.player
+	Audio.win()   # 승리 팡파레 (mino1 MinoSound.win)
 	# 전설급 보장 드랍 (mino1 tryDrop is_boss=true → rarity>=2)
 	if loot:
 		var drng := GameData.make_rng(rng.randi())
@@ -1320,8 +1362,11 @@ func enter_region(idx: int) -> void:
 	GameState.player["y"] = cy
 	spawn_timer = 0.0
 	GameState.save_game()
-	# 입장 배너
-	_show_region_enter_banner(def)
+	# 2장 이상(새 챕터)으로 들어가면 짧은 챕터 스토리, 1장(들판)은 지역 입장 배너
+	if region >= 1:
+		_show_chapter_story(region + 1)
+	else:
+		_show_region_enter_banner(def)
 
 
 # ── 풀밭 색조 재적용 (지역 전환) ────────────────────────────
@@ -1435,6 +1480,424 @@ func _draw():
 	s.source_code = src
 	s.reload()
 	return s
+
+
+# ════════════════════════════════════════════════════════════
+#  S6: 연출·사운드 마감
+# ════════════════════════════════════════════════════════════
+
+# ── 인트로/스토리 페이드 틱 (일시정지 중에도 도는 ALWAYS 노드) ──
+# 인트로·챕터 스토리는 게임을 일시정지하므로 Main._process 가 안 돈다.
+# 이 작은 노드를 PROCESS_MODE_ALWAYS 로 두고 매 프레임 Main 의 페이드 갱신을 호출.
+func _build_overlay_ticker() -> void:
+	var ticker := Node.new()
+	ticker.name = "OverlayTicker"
+	ticker.set_script(_make_overlay_ticker_script())
+	ticker.set("main", self)
+	ticker.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(ticker)
+
+
+func _make_overlay_ticker_script() -> GDScript:
+	var src := """
+extends Node
+var main
+func _process(d):
+	if main == null:
+		return
+	main._update_intro(d)
+	main._update_chapter_story(d)
+"""
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
+
+
+# ── 동료 카피바라 (mino1 _capybara) ─────────────────────────
+func _build_companion() -> void:
+	companion = Node2D.new()
+	companion.name = "Companion"
+	companion.set_script(COMPANION_SCRIPT)
+	companion.set("main", self)
+	add_child(companion)
+
+
+# ── mino 시그니처 워터마크 (mino1 _addMinoSig) — 화면 우측 하단 ──
+func _build_mino_sig() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "MinoSigLayer"
+	layer.layer = 3   # HUD 아래(은은하게)
+	add_child(layer)
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 26)
+	lbl.add_theme_color_override("font_color", Color8(0xe7, 0xc8, 0x78))
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
+	lbl.add_theme_constant_override("outline_size", 2)
+	lbl.text = "mino"
+	lbl.modulate.a = 0.45
+	lbl.rotation = -0.06
+	# 우측 하단(공격 버튼 위쪽 빈 공간)
+	lbl.anchor_left = 1.0
+	lbl.anchor_right = 1.0
+	lbl.anchor_top = 1.0
+	lbl.anchor_bottom = 1.0
+	lbl.offset_left = -110.0
+	lbl.offset_top = -300.0
+	lbl.offset_right = -16.0
+	lbl.offset_bottom = -268.0
+	layer.add_child(lbl)
+
+
+# ── 소리 켜고/끄기 토글 버튼 (우상단, 처음부터 버튼 아래) ──────
+func _build_sound_button() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "SoundBtnLayer"
+	layer.layer = 4
+	add_child(layer)
+	var ctrl := Control.new()
+	ctrl.name = "SoundBtn"
+	ctrl.anchor_left = 1.0
+	ctrl.anchor_right = 1.0
+	ctrl.offset_left = -76.0
+	ctrl.offset_top = 158.0    # 처음부터(↻, y=108~152) 버튼 아래
+	ctrl.offset_right = -12.0
+	ctrl.offset_bottom = 202.0
+	ctrl.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(ctrl)
+	var dn := Node2D.new()
+	dn.set_script(_make_sound_draw_script())
+	dn.set("ctrl", ctrl)
+	ctrl.add_child(dn)
+	ctrl.gui_input.connect(_on_sound_input)
+	sound_btn_ctrl = ctrl
+
+
+func _on_sound_input(event: InputEvent) -> void:
+	var pressed: bool = (event is InputEventScreenTouch and event.pressed) or \
+		(event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed)
+	if not pressed:
+		return
+	Audio.toggle()
+	if not Audio.is_muted():
+		Audio.ui_tap()
+		Audio.start_bgm()
+
+
+func _make_sound_draw_script() -> GDScript:
+	var src := """
+extends Node2D
+var ctrl
+func _process(_d):
+	queue_redraw()
+func _draw():
+	if ctrl == null:
+		return
+	var r = Rect2(0, 0, ctrl.size.x, ctrl.size.y)
+	draw_rect(r, Color(0.1, 0.14, 0.12, 0.7), true)
+	draw_rect(r, Color(0.5, 0.7, 0.55, 0.85), false, 2.0)
+	var c = ctrl.size / 2.0
+	var muted = Audio.is_muted()
+	# 스피커 모양 (작은 사각 + 삼각)
+	var sp = Color(0.85, 1.0, 0.9, 0.9) if not muted else Color(0.7, 0.7, 0.7, 0.7)
+	draw_rect(Rect2(c.x - 12, c.y - 5, 7, 10), sp, true)
+	var tri = PackedVector2Array([Vector2(c.x - 5, c.y - 9), Vector2(c.x + 3, c.y - 14), Vector2(c.x + 3, c.y + 14), Vector2(c.x - 5, c.y + 9)])
+	draw_colored_polygon(tri, sp)
+	if muted:
+		# X 표시 (음소거)
+		draw_line(Vector2(c.x + 8, c.y - 8), Vector2(c.x + 18, c.y + 8), Color(1, 0.5, 0.5, 0.9), 2.5)
+		draw_line(Vector2(c.x + 18, c.y - 8), Vector2(c.x + 8, c.y + 8), Color(1, 0.5, 0.5, 0.9), 2.5)
+	else:
+		# 음파 호 2개
+		draw_arc(Vector2(c.x + 6, c.y), 8.0, -0.7, 0.7, 8, sp, 2.0)
+		draw_arc(Vector2(c.x + 6, c.y), 13.0, -0.7, 0.7, 8, sp, 2.0)
+"""
+	var s := GDScript.new()
+	s.source_code = src
+	s.reload()
+	return s
+
+
+# ── 인트로 스토리 화면 (mino1 _showIntro) ────────────────────
+var _intro_active := false
+var _intro_t := 0.0
+var _intro_lines: Array = []     # Label 들
+var _intro_tap_label: Label = null
+var _intro_sig: Label = null
+
+func _show_intro() -> void:
+	if _intro_active:
+		return
+	_intro_active = true
+	_intro_t = 0.0
+	_intro_lines = []
+	get_tree().paused = true
+	intro_layer = CanvasLayer.new()
+	intro_layer.name = "IntroLayer"
+	intro_layer.layer = 20
+	intro_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(intro_layer)
+	# 어두운 오버레이
+	var ov := Node2D.new()
+	ov.set_script(_make_banner_overlay_script(0.82))
+	intro_layer.add_child(ov)
+	var vp := get_viewport().get_visible_rect().size
+	# mino 시그니처 (상단, 손글씨 사인 느낌)
+	_intro_sig = _intro_label("mino", int(vp.x * 0.13), Color8(0xf0, 0xd8, 0x78), true)
+	_intro_sig.position = Vector2(0, vp.y * 0.14 - 30.0)
+	_intro_sig.rotation = -0.07
+	_intro_sig.modulate.a = 0.0
+	intro_layer.add_child(_intro_sig)
+	var sig_tw := get_tree().create_tween()
+	sig_tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	sig_tw.tween_interval(0.4)
+	sig_tw.tween_property(_intro_sig, "modulate:a", 0.88, 0.9)
+	# 스토리 4줄
+	var lines := [
+		"지구는 오염에 잠식됐다.",
+		"동물들은 변이체가 되었고, 그 정점엔 오염의 군주가 있다.",
+		"마지막 희망인 그대여 —",
+		"군주를 쓰러뜨리고 지구를 정화하라.",
+	]
+	for i in lines.size():
+		var sz := 19 if i == 3 else 16
+		var col := Color8(0xe8, 0xc8, 0x7a) if i == 3 else Color8(0xcc, 0xcc, 0xcc)
+		var lbl := _intro_label(lines[i], sz, col, i == 3)
+		lbl.position = Vector2(0, vp.y / 2.0 - 70.0 + i * 44.0)
+		lbl.modulate.a = 0.0
+		intro_layer.add_child(lbl)
+		_intro_lines.append(lbl)
+	# "탭하여 시작"
+	_intro_tap_label = _intro_label("탭하여 시작", 15, Color8(0x88, 0x88, 0x88), false)
+	_intro_tap_label.position = Vector2(0, vp.y - 70.0)
+	_intro_tap_label.modulate.a = 0.0
+	intro_layer.add_child(_intro_tap_label)
+	# 탭으로 스킵
+	var tap := Control.new()
+	tap.anchor_right = 1.0
+	tap.anchor_bottom = 1.0
+	tap.mouse_filter = Control.MOUSE_FILTER_STOP
+	tap.gui_input.connect(_on_intro_tap)
+	intro_layer.add_child(tap)
+
+
+# 가운데 정렬 인트로 라벨 만들기
+func _intro_label(txt: String, sz: int, col: Color, bold: bool) -> Label:
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", sz)
+	lbl.add_theme_color_override("font_color", col)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	lbl.add_theme_constant_override("outline_size", 4 if bold else 3)
+	lbl.text = txt
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var vp := get_viewport().get_visible_rect().size
+	lbl.size = Vector2(vp.x, 40)
+	return lbl
+
+
+func _on_intro_tap(event: InputEvent) -> void:
+	var pressed: bool = (event is InputEventScreenTouch and event.pressed) or \
+		(event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed)
+	if pressed:
+		_end_intro()
+
+
+func _update_intro(delta: float) -> void:
+	if not _intro_active:
+		return
+	_intro_t += delta   # 일시정지 중이라 실시간 delta (ALWAYS 처리)
+	var phase_dur := 1.0
+	var fade_dur := 0.6
+	for i in _intro_lines.size():
+		var lbl: Label = _intro_lines[i]
+		if not is_instance_valid(lbl):
+			continue
+		var elapsed := _intro_t - i * phase_dur
+		lbl.modulate.a = 0.0 if elapsed <= 0.0 else minf(1.0, elapsed / fade_dur)
+	var all_shown := _intro_t >= (_intro_lines.size() - 1) * phase_dur + fade_dur
+	if all_shown and _intro_tap_label and is_instance_valid(_intro_tap_label):
+		_intro_tap_label.modulate.a = 0.55 + 0.45 * absf(sin(_intro_t * 2.2))
+	if _intro_t >= 5.5:
+		_end_intro()
+
+
+func _end_intro() -> void:
+	if not _intro_active:
+		return
+	_intro_active = false
+	GameState.seen_intro = true
+	get_tree().paused = false
+	if intro_layer and is_instance_valid(intro_layer):
+		# 페이드아웃 후 제거
+		var tw := create_tween()
+		var lyr := intro_layer
+		for c in lyr.get_children():
+			if c is CanvasItem:
+				tw.parallel().tween_property(c, "modulate:a", 0.0, 0.4)
+		tw.tween_callback(func(): if is_instance_valid(lyr): lyr.queue_free())
+	intro_layer = null
+	_intro_lines = []
+	_intro_tap_label = null
+	_intro_sig = null
+	# 인트로 다음 = 난이도 미선택이면 난이도 선택창
+	if GameState.difficulty < 0 and diff_panel:
+		diff_panel.open()
+
+
+# ── 챕터 스토리 (mino1 _showChapterStory) — 지역 입장/전환 시 짧게 ──
+var _story_active := false
+var _story_t := 0.0
+var _story_lines: Array = []
+var _story_tap_label: Label = null
+
+func _show_chapter_story(chapter: int) -> void:
+	if _story_active:
+		return
+	_story_active = true
+	_story_t = 0.0
+	_story_lines = []
+	get_tree().paused = true
+	story_layer = CanvasLayer.new()
+	story_layer.name = "StoryLayer"
+	story_layer.layer = 20
+	story_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(story_layer)
+	var ov := Node2D.new()
+	ov.set_script(_make_banner_overlay_script(0.88))
+	story_layer.add_child(ov)
+	var vp := get_viewport().get_visible_rect().size
+	# 챕터별 문구 (mino1)
+	var line1 := ""
+	var line2 := ""
+	if chapter == 2:
+		line1 = "오염의 군주를 쓰러뜨렸다."
+		line2 = "하지만 더 깊은 곳에서 또 다른 기운이…"
+	else:
+		line1 = "정화의 빛이 퍼진다. 제%d장." % chapter
+		line2 = "하지만 오염은 더 짙어진다."
+	var data := [
+		["— 제%d장 —" % chapter, 22, Color8(0xff, 0xcf, 0x5c), -80.0, true],
+		[line1, 16, Color8(0xcc, 0xcc, 0xcc), -30.0, false],
+		[line2, 15, Color8(0xaa, 0xaa, 0xaa), 10.0, false],
+	]
+	for d in data:
+		var lbl := _intro_label(str(d[0]), int(d[1]), d[2], bool(d[4]))
+		lbl.position = Vector2(0, vp.y / 2.0 + float(d[3]))
+		lbl.modulate.a = 0.0
+		story_layer.add_child(lbl)
+		_story_lines.append(lbl)
+	_story_tap_label = _intro_label("탭하여 시작", 14, Color8(0x88, 0x88, 0x88), false)
+	_story_tap_label.position = Vector2(0, vp.y - 70.0)
+	_story_tap_label.modulate.a = 0.0
+	story_layer.add_child(_story_tap_label)
+	var tap := Control.new()
+	tap.anchor_right = 1.0
+	tap.anchor_bottom = 1.0
+	tap.mouse_filter = Control.MOUSE_FILTER_STOP
+	tap.gui_input.connect(_on_story_tap)
+	story_layer.add_child(tap)
+
+
+func _on_story_tap(event: InputEvent) -> void:
+	var pressed: bool = (event is InputEventScreenTouch and event.pressed) or \
+		(event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed)
+	if pressed:
+		_end_chapter_story()
+
+
+func _update_chapter_story(delta: float) -> void:
+	if not _story_active:
+		return
+	_story_t += delta
+	var phase_dur := 0.9
+	var fade_dur := 0.55
+	for i in _story_lines.size():
+		var lbl: Label = _story_lines[i]
+		if not is_instance_valid(lbl):
+			continue
+		var elapsed := _story_t - i * phase_dur
+		lbl.modulate.a = 0.0 if elapsed <= 0.0 else minf(1.0, elapsed / fade_dur)
+	var all_shown := _story_t >= (_story_lines.size() - 1) * phase_dur + fade_dur
+	if all_shown and _story_tap_label and is_instance_valid(_story_tap_label):
+		_story_tap_label.modulate.a = 0.55 + 0.45 * absf(sin(_story_t * 2.2))
+	if _story_t >= 4.5:
+		_end_chapter_story()
+
+
+func _end_chapter_story() -> void:
+	if not _story_active:
+		return
+	_story_active = false
+	get_tree().paused = false
+	if story_layer and is_instance_valid(story_layer):
+		var tw := create_tween()
+		var lyr := story_layer
+		for c in lyr.get_children():
+			if c is CanvasItem:
+				tw.parallel().tween_property(c, "modulate:a", 0.0, 0.4)
+		tw.tween_callback(func(): if is_instance_valid(lyr): lyr.queue_free())
+	story_layer = null
+	_story_lines = []
+	_story_tap_label = null
+
+
+# ── 이스터에그 (mino1 _updateEasterEgg) ─────────────────────
+func _update_easter_egg(dt: float) -> void:
+	var p: Dictionary = GameState.player
+	# 좌상단 구석 → +10 레벨 (1회)
+	if not egg_tl_used and float(p.get("x", 0)) < 200.0 and float(p.get("y", 0)) < 200.0:
+		egg_tl_used = true
+		_grant_bonus_levels(10, "★ 비밀의 봉우리! +10 ★")
+		check_job_unlock()
+		return
+	if egg_used:
+		return
+	# 좌하단 구석 영역에서 공격 12연타 → +12 레벨
+	var in_corner := float(p.get("x", 0)) < 400.0 and float(p.get("y", 0)) > GameData.WORLD_H - 400.0
+	var atk_active := atk_btn_pressed or Input.is_key_pressed(KEY_SPACE)
+	if atk_active and not egg_prev_atk:
+		if in_corner:
+			egg_attack_count += 1
+			egg_attack_timer = 2.0
+	egg_prev_atk = atk_active
+	if egg_attack_timer > 0.0:
+		egg_attack_timer -= dt
+		if egg_attack_timer <= 0.0:
+			egg_attack_count = 0
+	if egg_attack_count >= 12 and in_corner and not egg_used:
+		egg_used = true
+		egg_attack_count = 0
+		_grant_bonus_levels(12, "★ 비밀 발견! +12 ★")
+		check_job_unlock()
+
+
+# 보너스 레벨 지급 + 화려한 연출 (mino1 _grantBonusLevels)
+func _grant_bonus_levels(add_levels: int, title: String) -> void:
+	var p: Dictionary = GameState.player
+	for k in add_levels:
+		p["lvl"] = int(p.get("lvl", 1)) + 1
+		p["xp"] = 0
+		p["xpNext"] = int(round(int(p.get("xpNext", 20)) * 1.5))
+		p["maxhp"] = float(p.get("maxhp", 0)) + 10.0
+		p["atkPow"] = float(p.get("atkPow", 0)) + 2.0
+		p["hp"] = p["maxhp"]
+		p["mp"] = p["maxmp"]
+		p["statPoints"] = int(p.get("statPoints", 0)) + 3
+	# 흰 섬광 + 파티클 (skills 의 플래시 재사용)
+	if skills:
+		skills.trigger_flash(Color8(0xff, 0xff, 0xff), 0.85)
+	for i in 5:
+		fx.add_particles(player.global_position, Color8(0xff, 0xdd, 0x22), 20)
+		fx.add_particles(player.global_position, Color8(0xff, 0x88, 0x00), 12)
+	add_shake(0.3, 8.0)
+	show_center_message("%s\nLv %d!" % [title, int(p.get("lvl", 1))])
+	Audio.levelup()
+	GameState.save_game()
 
 
 # ── 풀밭 텍스처 생성 (mino1: grass_soft, 오염된 땅) ───────────

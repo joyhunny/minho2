@@ -200,6 +200,7 @@ func _physics_process(delta: float) -> void:
 		if not intro_fx_done:
 			intro_fx_done = true
 			main.add_shake(0.5, 10.0)
+			Audio.roar()   # 보스 포효 (mino1 MinoSound.roar)
 			if main.skills:
 				main.skills.trigger_flash(Color8(0xff, 0x66, 0x44), 0.30)
 		intro_t += dt
@@ -411,6 +412,7 @@ func _update_meteors(dt: float, p: Dictionary) -> void:
 				m["hit"] = true
 				m["hit_t"] = 0.0
 				main.add_shake(0.12, 6.0)
+				Audio.boom()   # 운석 폭발 (mino1 MinoSound.boom)
 				# 착탄 피해 (반경 60, 방어 관통식 hazard)
 				if Vector2(p["x"] - float(m["tx"]), p["y"] - float(m["ty"])).length() < 60.0 and not player.is_invincible():
 					main.hazard_damage(26.0, 0.9, Color.WHITE, "")

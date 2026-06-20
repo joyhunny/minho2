@@ -154,6 +154,7 @@ func _on_input(event: InputEvent) -> void:
 
 # 스킬 적용 (mino1 _applySkill) — 효과는 Main.apply_skill 에 위임(전투와 한 곳)
 func _apply(id: String) -> void:
+	Audio.ui_tap()
 	if main and main.has_method("apply_skill"):
 		main.apply_skill(id)
 	active = false

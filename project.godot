@@ -13,6 +13,7 @@ config/features=PackedStringArray("4.3", "GL Compatibility")
 
 GameData="*res://autoload/GameData.gd"
 GameState="*res://autoload/GameState.gd"
+Audio="*res://autoload/Audio.gd"
 
 [display]
 

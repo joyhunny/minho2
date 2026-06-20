@@ -103,6 +103,7 @@ func _on_input(event: InputEvent) -> void:
 
 
 func _enter(idx: int) -> void:
+	Audio.ui_tap()
 	active = false
 	visible = false
 	get_tree().paused = false
