@@ -5,9 +5,14 @@ config_version=5
 
 [application]
 
-config/name="minho2 demo"
-run/main_scene="res://main.tscn"
+config/name="minho2"
+run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+GameData="*res://autoload/GameData.gd"
+GameState="*res://autoload/GameState.gd"
 
 [display]
 
