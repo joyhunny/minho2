@@ -14,6 +14,10 @@ const SKILLS_SCRIPT := preload("res://systems/Skills.gd")
 const JOB_SCRIPT := preload("res://ui/JobPanel.gd")
 const SKILL_TRAY_SCRIPT := preload("res://ui/SkillTray.gd")
 const SKILL_MENU_SCRIPT := preload("res://ui/SkillMenu.gd")
+const INVENTORY_SCRIPT := preload("res://systems/Inventory.gd")
+const LOOT_SCRIPT := preload("res://systems/Loot.gd")
+const INV_PANEL_SCRIPT := preload("res://ui/InventoryPanel.gd")
+const COOK_HUD_SCRIPT := preload("res://ui/CookHUD.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
@@ -65,6 +69,13 @@ var skill_tray = null             # SkillTray (우하단 스킬 버튼들)
 var skill_menu = null             # SkillMenu (전직 스킬 메뉴)
 var flash_node: Node2D = null     # 화면 전체 색 플래시 오버레이
 
+# ── 장비·요리·골드 (S4) ─────────────────────────────────────
+var inventory: Node = null        # InventorySystem (장착/해제/줍기/판매 단일 권한)
+var loot: Node2D = null           # LootSystem (바닥 장비·날고기·그릴·요리, 월드 좌표)
+var inv_panel = null              # InventoryPanel (가방 버튼 + 장비 창)
+var cook_hud = null               # CookHUD (좌하단 고기 패널 + 먹기 버튼)
+var food_buff_t := 0.0            # 고기 먹기 짧은 버프 남은 시간(S5/S6 버프 연동용 자리)
+
 
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
@@ -75,15 +86,18 @@ func _ready() -> void:
 	if GameState.difficulty < 0:
 		GameState.difficulty = 1
 
+	_build_inventory()       # 인벤토리 시스템(순수 로직) — 다른 빌드보다 먼저(loot·패널·전직이 참조)
 	_build_world()
 	_build_player()
 	_build_camera()
 	_build_fx()
+	_build_loot()            # 바닥 장비·날고기·그릴(월드 좌표) — fx·player 뒤
 	_build_skills()
 	_build_joystick()
 	_build_attack_button()
 	_build_growth_ui()
 	_build_skill_ui()
+	_build_inv_ui()          # 가방 버튼·장비 창 + 요리 HUD
 	_build_flash()
 	_build_info()
 
@@ -232,6 +246,51 @@ func _build_skill_ui() -> void:
 	skill_menu.set_script(SKILL_MENU_SCRIPT)
 	skill_menu.set("main", self)
 	menu_layer.add_child(skill_menu)
+
+
+# ── 인벤토리 시스템 (순수 로직 — 장착/해제/줍기/판매 단일 권한) ──
+func _build_inventory() -> void:
+	inventory = Node.new()
+	inventory.name = "Inventory"
+	inventory.set_script(INVENTORY_SCRIPT)
+	inventory.set("main", self)
+	add_child(inventory)
+
+
+# ── 루트(바닥 장비·날고기·그릴·요리, 월드 좌표 Node2D) ───────
+func _build_loot() -> void:
+	loot = Node2D.new()
+	loot.name = "Loot"
+	loot.set_script(LOOT_SCRIPT)
+	loot.set("main", self)
+	loot.z_index = 50   # 적(y기반)보다 위지만 Fx(3000) 아래 — 바닥 아이템 느낌
+	add_child(loot)
+
+
+# ── 장비 창(가방 버튼) + 요리 HUD ───────────────────────────
+func _build_inv_ui() -> void:
+	# 가방 버튼 + 장비 창 (패널 열리면 일시정지 → ALWAYS 레이어)
+	var inv_layer := CanvasLayer.new()
+	inv_layer.name = "InvLayer"
+	inv_layer.layer = 8   # 스탯창과 같은 대(둘 다 토글 패널)
+	inv_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(inv_layer)
+	inv_panel = Control.new()
+	inv_panel.name = "InventoryPanel"
+	inv_panel.set_script(INV_PANEL_SCRIPT)
+	inv_panel.set("main", self)
+	inv_layer.add_child(inv_panel)
+
+	# 요리 HUD (좌하단 고기 패널 + 먹기 버튼) — 그리기 전용
+	var cook_layer := CanvasLayer.new()
+	cook_layer.name = "CookLayer"
+	cook_layer.layer = 4   # 스킬 트레이와 같은 대(작업대 버튼들)
+	add_child(cook_layer)
+	cook_hud = Control.new()
+	cook_hud.name = "CookHUD"
+	cook_hud.set_script(COOK_HUD_SCRIPT)
+	cook_hud.set("main", self)
+	cook_layer.add_child(cook_hud)
 
 
 # ── 화면 전체 색 플래시 오버레이 (mino1 _flashGfx) ───────────
@@ -424,6 +483,9 @@ func _handle_touch(id: int, pos: Vector2, pressed: bool) -> void:
 		# 스킬 버튼 먼저 검사 (mino1: 스킬 버튼 → 공격 → 이동 순) — 적중하면 소비
 		if skill_tray and skill_tray.try_hit(pos):
 			return
+		# 먹기 버튼(좌하단) — 조이스틱보다 먼저 검사(이동으로 안 새게)
+		if cook_hud and cook_hud.try_eat(pos):
+			return
 		# 화면 왼쪽 60% 에서만 조이스틱 시작 (mino1 과 동일)
 		if not joy_active and pos.x < vp_w * 0.6:
 			joy_active = true
@@ -477,6 +539,10 @@ func _process(delta: float) -> void:
 
 	# ── HP/MP 자동 회복 (난이도 regen) ──
 	_update_regen(dt)
+
+	# ── 고기 버프 타이머 (효과 연동은 S5/S6) ──
+	if food_buff_t > 0.0:
+		food_buff_t = maxf(0.0, food_buff_t - dt)
 
 	# ── 스킬 갱신 (쿨다운·투사체·메테오·장판·소환·마나회복·플래시) ──
 	if skills:
@@ -730,6 +796,33 @@ func show_pickup_toast(msg: String) -> void:
 		info_label.text = msg
 
 
+# ── 고기 상함/요리 알림 (mino1 _showMeatAlert) — CookHUD 가 잠깐 표시 ──
+func show_meat_alert(msg: String) -> void:
+	if cook_hud:
+		cook_hud.show_alert(msg)
+
+
+# ── 회복 텍스트 (고기 먹기 등) — 월드 라벨 띄우기 (mino1 _floatTexts heal) ──
+func spawn_heal_text(world_pos: Vector2, value: String, color: Color) -> void:
+	var lbl := Label.new()
+	if kfont:
+		lbl.add_theme_font_override("font", kfont)
+	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_color_override("font_color", color)
+	lbl.add_theme_color_override("font_outline_color", Color8(0x1a, 0x1a, 0x1a))
+	lbl.add_theme_constant_override("outline_size", 4)
+	lbl.text = value
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.position = world_pos
+	fx_text_layer.add_child(lbl)
+	float_texts.append({"label": lbl, "vel": -55.0, "life": 0.8, "t": 0.0, "wobble": 0.0, "base_x": lbl.position.x})
+
+
+# ── 고기 먹기 짧은 버프 신호 (mino1 _buffActive 4초) — 효과는 S5/S6 ──
+func apply_food_buff(dur: float) -> void:
+	food_buff_t = maxf(food_buff_t, dur)
+
+
 # 소환 슬라임용 텍스처 (slime 스프라이트 재사용)
 func _load_ally_tex() -> Texture2D:
 	var path := "res://assets/sprites/slime.png"
@@ -824,6 +917,22 @@ func on_enemy_died(enemy: Node, pos: Vector2) -> void:
 	GameState.player["gold"] = int(GameState.player.get("gold", 0)) + gold_amt
 	# 골드 텍스트 (노랑)
 	_spawn_gold_text(pos, gold_amt, is_elite)
+
+	# ── 장비 드랍 시도 (mino1 tryDrop) — 엘리트는 추가 1회(70% 고정) ──
+	if loot:
+		var drng := GameData.make_rng(rng.randi())
+		var dropped = GameData.try_drop(drng, pos.x, pos.y, false)
+		if dropped:
+			loot.add_ground_item(dropped)
+		if is_elite and rng.randf() < 0.70:
+			var dropped2 = GameData.try_drop(drng, pos.x + 24.0, pos.y + 12.0, false)
+			if dropped2:
+				loot.add_ground_item(dropped2)
+
+		# ── 날고기 드랍 시도 (~35%, 엘리트 ~60%) (mino1 meatChance) ──
+		var meat_chance := 0.60 if is_elite else 0.35
+		if rng.randf() < meat_chance:
+			loot.add_raw_meat(pos.x, pos.y)
 
 
 func _spawn_gold_text(pos: Vector2, amt: int, is_elite: bool) -> void:

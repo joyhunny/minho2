@@ -188,10 +188,14 @@ func _apply(def: Dictionary) -> void:
 		p["job2"] = id
 		_apply_job2_stats(id, p)
 
-	# 기본 무기 지급 + 자동 장착 (스탯 합산은 Inventory 시스템이 S4 — 여기선 직접 합산)
+	# 기본 무기 지급 + 자동 장착 (S4: InventorySystem 이 장착/해제 단일 권한 — 그쪽에 위임)
 	var weapon = def.get("weapon", null)
 	if weapon != null and GameData.ITEM_DEFS.has(weapon):
-		_equip_weapon(weapon, p)
+		if main and main.inventory:
+			main.inventory.equip("weapon", weapon)
+			main.show_pickup_toast("무기 지급: " + str(GameData.ITEM_DEFS[weapon].get("name", weapon)))
+		else:
+			_equip_weapon(weapon, p)   # 안전 폴백 (인벤토리 미빌드 시)
 
 	# 전직 완료 연출 (파티클 + 흔들림 + 메시지)
 	if main:
