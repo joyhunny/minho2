@@ -7,6 +7,9 @@ const FONT_PATH := "res://fonts/Jua-Regular.ttf"
 const PLAYER_SCENE := preload("res://scenes/Player.tscn")
 const ENEMY_SCENE := preload("res://scenes/Enemy.tscn")
 const FX_SCENE := preload("res://scenes/Fx.gd")
+const HUD_SCRIPT := preload("res://ui/HUD.gd")
+const LEVELUP_SCRIPT := preload("res://ui/LevelupPanel.gd")
+const STAT_SCRIPT := preload("res://ui/StatPanel.gd")
 
 const GRASS_TILE := 384       # mino1 grass_soft 타일 크기
 const JOY_MAX := 62.0         # 조이스틱 최대 반경 (mino1 과 동일)
@@ -44,11 +47,19 @@ var joy_draw: Node2D
 
 var info_label: Label
 
+# ── 성장(S2): HUD·레벨업 선택창·스탯 분배창 ─────────────────
+var hud: Control = null
+var lvlup_panel = null            # LevelupPanel (레벨업 3택)
+var stat_panel = null             # StatPanel (스탯 분배)
+# 레벨업 스킬 선택 등에 쓰는 결정론 RNG (mino1 this._rng) — 시드 저장값 기준
+var _core_rng: GameData.RNG = null
+
 
 func _ready() -> void:
 	if ResourceLoader.exists(FONT_PATH):
 		kfont = load(FONT_PATH)
 	rng.randomize()
+	_core_rng = GameData.make_rng(GameState.seed_val)
 	# 난이도 미선택이면 '보통'으로 폴백 (난이도 선택 화면은 S5)
 	if GameState.difficulty < 0:
 		GameState.difficulty = 1
@@ -59,7 +70,52 @@ func _ready() -> void:
 	_build_fx()
 	_build_joystick()
 	_build_attack_button()
+	_build_growth_ui()
 	_build_info()
+
+
+# ── 성장 UI: HUD + 레벨업 선택창 + 스탯 분배창 (S2) ──────────
+func _build_growth_ui() -> void:
+	# HUD (항상 보이는 정보판)
+	var hud_layer := CanvasLayer.new()
+	hud_layer.name = "HudLayer"
+	hud_layer.layer = 5
+	add_child(hud_layer)
+	hud = Control.new()
+	hud.name = "HUD"
+	hud.set_script(HUD_SCRIPT)
+	hud.set("main", self)
+	hud_layer.add_child(hud)
+
+	# 스탯 분배창 (HUD 위, 레벨업창 아래)
+	var stat_layer := CanvasLayer.new()
+	stat_layer.name = "StatLayer"
+	stat_layer.layer = 8
+	add_child(stat_layer)
+	stat_panel = Control.new()
+	stat_panel.name = "StatPanel"
+	stat_panel.set_script(STAT_SCRIPT)
+	stat_panel.set("main", self)
+	stat_layer.add_child(stat_panel)
+
+	# 레벨업 선택창 (제일 위, 게임 일시정지)
+	var lvl_layer := CanvasLayer.new()
+	lvl_layer.name = "LevelupLayer"
+	lvl_layer.layer = 10
+	lvl_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(lvl_layer)
+	lvlup_panel = Control.new()
+	lvlup_panel.name = "LevelupPanel"
+	lvlup_panel.set_script(LEVELUP_SCRIPT)
+	lvlup_panel.set("main", self)
+	lvl_layer.add_child(lvlup_panel)
+
+
+# 레벨업 스킬 선택에 쓰는 결정론 RNG (mino1 this._rng) — LevelupPanel 이 호출
+func core_rng() -> GameData.RNG:
+	if _core_rng == null:
+		_core_rng = GameData.make_rng(GameState.seed_val)
+	return _core_rng
 
 
 # ── 월드: 풀밭 타일 배경 (2200x2200) ────────────────────────
@@ -170,16 +226,24 @@ func _draw():
 func _build_info() -> void:
 	var layer := CanvasLayer.new()
 	layer.name = "UILayer"
+	layer.layer = 6   # HUD(5) 위, 스탯창(8) 아래
 	add_child(layer)
+	# 화면 하단 가운데 — 짧은 안내/게임오버 메시지 (HUD 와 겹치지 않게)
 	info_label = Label.new()
 	if kfont:
 		info_label.add_theme_font_override("font", kfont)
-	info_label.add_theme_font_size_override("font_size", 30)
+	info_label.add_theme_font_size_override("font_size", 24)
 	info_label.add_theme_color_override("font_color", Color.WHITE)
 	info_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	info_label.add_theme_constant_override("outline_size", 6)
-	info_label.position = Vector2(24, 24)
-	info_label.text = "왼쪽=이동(WASD)  |  오른쪽 버튼=공격(스페이스)"
+	info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	info_label.anchor_left = 0.0
+	info_label.anchor_right = 1.0
+	info_label.anchor_top = 1.0
+	info_label.anchor_bottom = 1.0
+	info_label.offset_top = -240.0
+	info_label.offset_bottom = -210.0
+	info_label.text = "왼쪽=이동  ·  오른쪽 버튼=공격"
 	layer.add_child(info_label)
 
 
@@ -418,8 +482,9 @@ func _update_combat(dt: float) -> void:
 		var d := sqrt(ddx * ddx + ddy * ddy)
 		# 범위 안 + 바라보는 방향 앞쪽 (mino1: ddx*face >= -16)
 		if d < atk_range and ddx * face >= -16.0:
-			# 치명타 (critical 스킬 — 스킬 시스템은 S2, 지금은 0)
-			var crit_chance := 0.15 * float(p.get("skills", {}).get("critical", 0))
+			var skills: Dictionary = p.get("skills", {})
+			# 치명타 (critical 스킬 — 전직 보너스는 S3)
+			var crit_chance := 0.15 * float(skills.get("critical", 0))
 			var is_crit := crit_chance > 0.0 and rng.randf() < crit_chance
 			var dmg := atk_pow
 			if is_crit:
@@ -430,6 +495,14 @@ func _update_combat(dt: float) -> void:
 			fx.add_impact_hit(e.global_position, is_crit)
 			spawn_float_text(e.global_position, str(int(dmg)), is_crit)
 			hit_count += 1
+
+			# 생명 흡수 스킬 (mino1: 명중당 +1.5 × 스택)
+			var drain := int(skills.get("life_drain", 0))
+			if drain > 0:
+				p["hp"] = minf(float(p.get("maxhp", 0)), float(p.get("hp", 0)) + 1.5 * drain)
+			# 시너지: 치명타 + 공격가속 → 다음 공격 쿨다운 30% 감소 (mino1)
+			if is_crit and int(skills.get("quick_strike", 0)) > 0:
+				p["atkCD"] = maxf(0.0, float(p.get("atkCD", 0)) * 0.7)
 
 	# 히트스톱 (명중 시 0.04초) (mino1)
 	if hit_count > 0:
@@ -585,7 +658,7 @@ func _spawn_gold_text(pos: Vector2, amt: int, is_elite: bool) -> void:
 	float_texts.append({"label": lbl, "vel": -60.0, "life": 0.8, "t": 0.0, "wobble": 0.0, "base_x": lbl.position.x})
 
 
-# ── 경험치/레벨업 (mino1 _gainXP — 스탯 누적은 보존, 스킬창은 S2) ──
+# ── 경험치/레벨업 (mino1 _gainXP) — S2: 레벨업 시 3택 스킬 선택창 ──
 func _gain_xp(amount: int) -> void:
 	var p: Dictionary = GameState.player
 	p["xp"] = int(p.get("xp", 0)) + maxi(1, int(round(amount * float(p.get("xpGainMult", 1.0)))))
@@ -602,10 +675,38 @@ func _gain_xp(amount: int) -> void:
 		leveled += 1
 	if leveled > 0:
 		GameState.save_game()
-		# 레벨업 손맛: 노란 파티클 + 흔들림 (스킬 선택창은 S2)
+		# 레벨업 손맛: 노란 파티클 + 흔들림
 		fx.add_particles(player.global_position, Color8(0xff, 0xcf, 0x5c), 24)
 		spawn_impact(player.global_position, 70.0, Color8(0xff, 0xcf, 0x5c))
 		add_shake(0.15, 4.0)
+		# ★ 한 번에 여러 레벨이 올라도 스킬 선택창은 '하나씩' 큐로 (mino1 _pendingLvlups)
+		if lvlup_panel:
+			lvlup_panel.queue_levelup(leveled)
+
+
+# ── 스킬 적용 (mino1 _applySkill) — LevelupPanel 이 카드 선택 시 호출 ──
+func apply_skill(id: String) -> void:
+	var p: Dictionary = GameState.player
+	var skills: Dictionary = p.get("skills", {})
+	skills[id] = int(skills.get(id, 0)) + 1
+	p["skills"] = skills
+
+	match id:
+		"sword_mastery":
+			p["atkPow"] = float(p.get("atkPow", 0)) + 5.0
+		"quick_strike":
+			p["atkSpeed"] = maxf(0.12, float(p.get("atkSpeed", 0.5)) * 0.8)
+		"iron_wall":
+			p["armor"] = float(p.get("armor", 0)) + 3.0
+		"swift_wind":
+			p["sp"] = minf(320.0, float(p.get("sp", 0)) + 22.0)
+		"wide_slash":
+			p["atkRange"] = float(p.get("atkRange", 64)) + 14.0
+		"vitality":
+			p["maxhp"] = float(p.get("maxhp", 0)) + 20.0
+			p["hp"] = minf(float(p["maxhp"]), float(p.get("hp", 0)) + 20.0)
+		# critical·life_drain 은 패시브 — 전투 판정에서 매번 읽는다(여기선 스택만 증가)
+	GameState.save_game()
 
 
 # ── 플레이어 피격 콜백 (mino1: hurt 사운드·흔들림·게임오버) ──
