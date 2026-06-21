@@ -162,11 +162,11 @@ const DIFFICULTY_DEFS := [
 	{"id": "hard",       "name": "어려움",     "sub": "방심하면 위험",   "dmg_mult": 1.7,  "hp_mult": 1.25, "regen": 1, "color": Color("#cddc39")},
 	{"id": "extreme",    "name": "익스트림",   "sub": "가혹한 전장",     "dmg_mult": 2.6,  "hp_mult": 1.6,  "regen": 1, "color": Color("#ff9800")},
 	{"id": "impossible", "name": "임파서블",   "sub": "한 대도 치명적",  "dmg_mult": 4.0,  "hp_mult": 2.0,  "regen": 0, "color": Color("#f4511e")},
-	{"id": "easy_god",   "name": "쉬운 신",    "sub": "神 — 입문",       "dmg_mult": 5.5,  "hp_mult": 2.5,  "regen": 0, "color": Color("#ab47bc")},
-	{"id": "normal_god", "name": "보통 신",    "sub": "神 — 분노",       "dmg_mult": 7.5,  "hp_mult": 3.2,  "regen": 0, "color": Color("#9c27b0")},
-	{"id": "hard_god",   "name": "어려운 신",  "sub": "神 — 폭주",       "dmg_mult": 10.0, "hp_mult": 4.0,  "regen": 0, "color": Color("#7b1fa2")},
-	{"id": "ext_god",    "name": "익스트림 신", "sub": "神 — 재앙",      "dmg_mult": 14.0, "hp_mult": 5.5,  "regen": 0, "color": Color("#5e35b1")},
-	{"id": "imp_god",    "name": "임파서블 신", "sub": "神 — 절망",      "dmg_mult": 20.0, "hp_mult": 7.5,  "regen": 0, "color": Color("#311b92")},
+	{"id": "easy_god",   "name": "쉬운 신",    "sub": "신 — 입문",       "dmg_mult": 5.5,  "hp_mult": 2.5,  "regen": 0, "color": Color("#ab47bc")},
+	{"id": "normal_god", "name": "보통 신",    "sub": "신 — 분노",       "dmg_mult": 7.5,  "hp_mult": 3.2,  "regen": 0, "color": Color("#9c27b0")},
+	{"id": "hard_god",   "name": "어려운 신",  "sub": "신 — 폭주",       "dmg_mult": 10.0, "hp_mult": 4.0,  "regen": 0, "color": Color("#7b1fa2")},
+	{"id": "ext_god",    "name": "익스트림 신", "sub": "신 — 재앙",      "dmg_mult": 14.0, "hp_mult": 5.5,  "regen": 0, "color": Color("#5e35b1")},
+	{"id": "imp_god",    "name": "임파서블 신", "sub": "신 — 절망",      "dmg_mult": 20.0, "hp_mult": 7.5,  "regen": 0, "color": Color("#311b92")},
 ]
 
 # ══════════════════════════════════════════════════════════

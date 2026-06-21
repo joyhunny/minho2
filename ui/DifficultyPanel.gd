@@ -79,7 +79,7 @@ func _build() -> void:
 		sb.size = Vector2(cell_w, 20)
 		sb.position = Vector2(x, y + cell_h * 0.6)
 
-	var hint := _mk("우상단 ↻ 버튼으로 언제든 처음부터 다시 고를 수 있어", 12, Color8(0x7e, 0x7e, 0xa0))
+	var hint := _mk("게임 중 우상단 버튼으로 난이도를 다시 고를 수 있어", 12, Color8(0x7e, 0x7e, 0xa0))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.size = Vector2(w, 20)
 	hint.position = Vector2(0, top + 5.0 * (cell_h + gap) + 8.0)

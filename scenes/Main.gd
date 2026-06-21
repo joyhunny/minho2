@@ -1735,13 +1735,9 @@ func _end_intro() -> void:
 	GameState.seen_intro = true
 	get_tree().paused = false
 	if intro_layer and is_instance_valid(intro_layer):
-		# 페이드아웃 후 제거
-		var tw := create_tween()
-		var lyr := intro_layer
-		for c in lyr.get_children():
-			if c is CanvasItem:
-				tw.parallel().tween_property(c, "modulate:a", 0.0, 0.4)
-		tw.tween_callback(func(): if is_instance_valid(lyr): lyr.queue_free())
+		# 즉시 제거. (예전: 페이드 tween → 난이도창이 곧장 일시정지를 걸어
+		#  tween이 멈춰 인트로가 안 사라지고 난이도 카드를 덮던 버그)
+		intro_layer.queue_free()
 	intro_layer = null
 	_intro_lines = []
 	_intro_tap_label = null
