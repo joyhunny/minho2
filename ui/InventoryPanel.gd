@@ -34,7 +34,10 @@ const SLOT_LABELS := ["무기", "갑옷", "장신구"]
 func _ready() -> void:
 	anchor_right = 1.0
 	anchor_bottom = 1.0
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	# 닫혀 있을 땐 입력을 통과시킨다(IGNORE) — 안 그러면 화면 전체를 덮은 이 컨트롤이
+	# 빈 곳 터치까지 다 먹어 이동·공격이 막힌다. 열릴 때만 STOP(모달)로 바꾼다.
+	# 닫힘 상태의 가방 토글 버튼은 Main._handle_touch 가 try_button() 으로 잡는다.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if main and main.has_method("get_kfont"):
 		kfont = main.get_kfont()
 	if main:
@@ -78,6 +81,7 @@ func _on_input(event: InputEvent) -> void:
 func _open() -> void:
 	open = true
 	selected_idx = -1
+	mouse_filter = Control.MOUSE_FILTER_STOP   # 열리면 모달(뒤로 입력 안 샘)
 	get_tree().paused = true
 	_build()
 
@@ -85,11 +89,23 @@ func _open() -> void:
 func _close() -> void:
 	open = false
 	selected_idx = -1
+	mouse_filter = Control.MOUSE_FILTER_IGNORE   # 닫히면 입력 통과(이동·공격 살림)
 	get_tree().paused = false
 	_clear_labels()
 	_slot_rects = []
 	_cell_rects = []
 	_draw_node.queue_redraw()
+
+
+# 닫힘 상태의 가방 토글 버튼을 Main._handle_touch 가 먼저 검사한다.
+# (열려 있을 땐 STOP 모달이라 gui_input(_on_input)이 직접 처리하므로 여긴 안 탄다.)
+func try_button(pos: Vector2) -> bool:
+	if open:
+		return false
+	if _btn_rect.has_point(pos):
+		_open()
+		return true
+	return false
 
 
 # mino1 _drawInventoryPanel — 레이아웃 계산 + 라벨 생성 (값 갱신은 _update_labels)

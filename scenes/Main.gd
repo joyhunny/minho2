@@ -637,6 +637,12 @@ func _handle_touch(id: int, pos: Vector2, pressed: bool) -> void:
 		# 먹기 버튼(좌하단) — 조이스틱보다 먼저 검사(이동으로 안 새게)
 		if cook_hud and cook_hud.try_eat(pos):
 			return
+		# 우상단 토글 버튼(스탯·가방) — 닫혀 있을 때 여기서 잡는다.
+		# (열려 있을 땐 패널이 STOP 모달이라 이 함수 자체가 안 불린다.)
+		if stat_panel and stat_panel.try_button(pos):
+			return
+		if inv_panel and inv_panel.try_button(pos):
+			return
 		# 화면 왼쪽 60% 에서만 조이스틱 시작 (mino1 과 동일)
 		if not joy_active and pos.x < vp_w * 0.6:
 			joy_active = true

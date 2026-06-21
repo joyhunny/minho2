@@ -35,7 +35,10 @@ const STAT_DEFS := [
 func _ready() -> void:
 	anchor_right = 1.0
 	anchor_bottom = 1.0
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	# 닫혀 있을 땐 입력을 통과시킨다(IGNORE) — 안 그러면 화면 전체를 덮은 이 컨트롤이
+	# 빈 곳 터치까지 다 먹어 이동·공격이 막힌다. 열릴 때만 STOP(모달)로 바꾼다.
+	# 닫힘 상태의 STAT 토글 버튼은 Main._handle_touch 가 try_button() 으로 잡는다.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if main and main.has_method("get_kfont"):
 		kfont = main.get_kfont()
 	# 토글 버튼: 우상단 (퀘스트 텍스트 아래)
@@ -80,14 +83,27 @@ func _on_input(event: InputEvent) -> void:
 
 func _open() -> void:
 	open = true
+	mouse_filter = Control.MOUSE_FILTER_STOP   # 열리면 모달(뒤로 입력 안 샘)
 	_build_panel()
 
 
 func _close() -> void:
 	open = false
+	mouse_filter = Control.MOUSE_FILTER_IGNORE   # 닫히면 입력 통과(이동·공격 살림)
 	_clear_labels()
 	_stat_btn_rects = []
 	_draw_node.queue_redraw()
+
+
+# 닫힘 상태의 STAT 토글 버튼을 Main._handle_touch 가 먼저 검사한다.
+# (열려 있을 땐 STOP 모달이라 gui_input(_on_input)이 직접 처리하므로 여긴 안 탄다.)
+func try_button(pos: Vector2) -> bool:
+	if open:
+		return false
+	if _btn_rect.has_point(pos):
+		_open()
+		return true
+	return false
 
 
 # mino1 _drawStatPanel — 패널 레이아웃 계산 + 라벨 생성
