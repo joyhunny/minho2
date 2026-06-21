@@ -14,6 +14,11 @@
 build/
 exports/
 
+# Node (검증 도구 touch_verify.js 가 쓰는 playwright — 로컬에만 둔다)
+node_modules/
+package.json
+package-lock.json
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
